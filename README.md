@@ -19,7 +19,7 @@
 
 
 ## News
-- [2024/10] 🔥 Our latest **W4A4** Diffusion model quantization work **SVDQuant** algorithm and **Nunchaku** system is pubicly released! Check our [paper](http://arxiv.org/abs/2411.05007)!
+- [2024/10] 🔥 Our latest **W4A4** Diffusion model quantization work **SVDQuant** algorithm and [**Nunchaku**](https://github.com/mit-han-lab/nunchaku) system is pubicly released! Check our [paper](http://arxiv.org/abs/2411.05007)!
 - [2024/05] 🔥 Our latest **W4A8KV4** LLM quantization work **QoQ** algorithm and **QServe** system is publicly released! **QoQ** is short for *quattuor-octō-quattuor* which is 4-8-4 in latin. Check our [paper](https://arxiv.org/abs/2405.04532)!
 
 ## Key Features
@@ -149,11 +149,19 @@ The absolute token generation throughputs of QServe and baseline systems (Unit: 
 
 If you find `deepcompressor` useful or relevant to your research, please kindly cite our paper:
 
-```
+```bibtex
 @article{lin2024qserve,
   title={QServe: W4A8KV4 Quantization and System Co-design for Efficient LLM Serving},
   author={Lin*, Yujun and Tang*, Haotian and Yang*, Shang and Zhang, Zhekai and Xiao, Guangxuan and Gan, Chuang and Han, Song},
   journal={arXiv preprint arXiv:2405.04532},
+  year={2024}
+}
+
+@article{
+  li2024svdquant,
+  title={SVDQuant: Absorbing Outliers by Low-Rank Components for 4-Bit Diffusion Models},
+  author={Li*, Muyang and Lin*, Yujun and Zhang*, Zhekai and Cai, Tianle and Li, Xiuyu and Guo, Junxian and Xie, Enze and Meng, Chenlin and Zhu, Jun-Yan and Han, Song},
+  journal={arXiv preprint arXiv:2411.05007},
   year={2024}
 }
 ```
