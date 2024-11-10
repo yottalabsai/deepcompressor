@@ -15,16 +15,15 @@
         <img alt="Pypi" src="https://img.shields.io/pypi/v/deepcompressor">
     </a> -->
 </p>
-<br />
-
 
 ## News
-- [2024/10] 🔥 Our latest **W4A4** Diffusion model quantization work **SVDQuant** algorithm and [**Nunchaku**](https://github.com/mit-han-lab/nunchaku) system is pubicly released! Check our [paper](http://arxiv.org/abs/2411.05007)!
+- [2024/11] 🔥 Our latest **W4A4** diffusion model quantization work **SVDQuant** algorithm and [**Nunchaku**](https://github.com/mit-han-lab/nunchaku) system is publicly released! Check our [paper](http://arxiv.org/abs/2411.05007)!
 - [2024/05] 🔥 Our latest **W4A8KV4** LLM quantization work **QoQ** algorithm and **QServe** system is publicly released! **QoQ** is short for *quattuor-octō-quattuor* which is 4-8-4 in latin. Check our [paper](https://arxiv.org/abs/2405.04532)!
 
 ## Key Features
 
 ***DeepCompressor*** is an open source model compression toolbox for large language models and diffusion models based on PyTorch. DeepCompressor currently supports fake quantization with any integer and floating-point data type within 8 bits, e.g., INT8, INT4 and FP4_E2M1. Here are examples that implement the following algorithms.
+
 + [Post-training quantization for large language models](/examples/llm/):
   + Weight-only Quantization
     + [AWQ (W4A16)](/examples/llm/configs/awq.yaml)
@@ -63,10 +62,10 @@ poetry install
 
 [[Website](https://hanlab.mit.edu/projects/svdquant)][[Paper](http://arxiv.org/abs/2411.05007)][[Nunchaku Inference System](https://github.com/mit-han-lab/nunchaku)]
 
-Diffusion models have been proven highly effective at generating high-quality images. However, as these models grow larger, they require significantly more memory and suffer from higher latency, posing substantial challenges for deployment. In this work, we aim to accelerate diffusion models by quantizing their weights and activations to 4 bits. At such an aggressive level, both weights and activations are highly sensitive to quantization, where conventional post-training quantization methods for large language models like smoothing become insufficient. To overcome this limitation, we propose **SVDQuant**, a new 4-bit quantization paradigm. Different from smoothing which redistributes outliers between weights and activations, our approach *absorbs* these outliers using a low-rank branch. We first shift the outliers from activations into the weights, then employ a high-precision low-rank branch to take in the outliers in the weights with SVD. This process eases the quantization on both sides. However, naively running the low-rank branch independently incurs significant overhead due to extra data movement of activations, negating the quantization speedup. To address this, we co-design an inference engine **Nunchaku** that fuses the kernels in the low-rank branch into thosein the low-bit branch to cut off redundant memory access. It can also seamlessly support off-the-shelf low-rank adapters (LoRAs) without the requantization. Extensive experiments on SDXL, PixArt-Sigma, and FLUX.1 validate the effectiveness of SVDQuant in preserving image quality. We reduce the memory usage for the 12B FLUX.1 models by 3.6×, achieving 3.5× speedup over the 4-bit weight-only quantized baseline on a 16GB RTX-4090 GPU, paving the way for more interactive applications on PCs.
+Diffusion models have been proven highly effective at generating high-quality images. However, as these models grow larger, they require significantly more memory and suffer from higher latency, posing substantial challenges for deployment. In this work, we aim to accelerate diffusion models by quantizing their weights and activations to 4 bits. At such an aggressive level, both weights and activations are highly sensitive, where conventional post-training quantization methods for large language models like smoothing become insufficient. To overcome this limitation, we propose **SVDQuant**, a new 4-bit quantization paradigm. Different from smoothing which redistributes outliers between weights and activations, our approach absorbs these outliers using a low-rank branch. We first consolidate the outliers by shifting them from activations to weights, then employ a high-precision low-rank branch to take in the weight outliers with Singular Value Decomposition (SVD). This process eases the quantization on both sides. However, naïvely running the low-rank branch independently incurs significant overhead due to extra data movement of activations, negating the quantization speedup. To address this, we co-design an inference engine **Nunchaku** that fuses the kernels of the low-rank branch into those of the low-bit branch to cut off redundant memory access. It can also seamlessly support off-the-shelf low-rank adapters (LoRAs) without the need for re-quantization. Extensive experiments on SDXL, PixArt-∑, and FLUX.1 validate the effectiveness of SVDQuant in preserving image quality. We reduce the memory usage for the 12B FLUX.1 models by 3.5×, achieving 3.0× speedup over the 4-bit weight-only quantized baseline on the 16GB laptop 4090 GPU, paving the way for more interactive applications on PCs.
 
 ![Teaser](/assets/diffusion/svdquant/teaser.jpg)
-![SVDQuant](/assets/diffusion/svdquant/svdquant.png)
+![SVDQuant](/assets/diffusion/svdquant/svdquant.gif)
 
 #### Quality Evaluation
 
@@ -170,7 +169,7 @@ If you find `deepcompressor` useful or relevant to your research, please kindly 
 
 The following projects are highly related to QServe. Our group has developed full-stack application-algorithm-system-hardware support for efficient large models, receiving **9k+ GitHub stars** and **over 1M Huggingface community downloads**.
 
-You are also welcome to check out [MIT HAN LAB](https://hanlab.mit.edu) for other exciting projects on **Efficient Generative AI**!
+You are also welcome to check out [MIT HAN Lab](https://hanlab.mit.edu) for other exciting projects on **Efficient Generative AI**!
 
 - [**System**] [QServe: W4A8KV4 Quantization for Efficient LLM Serving](https://github.com/mit-han-lab/qserve)
 
@@ -187,6 +186,6 @@ You are also welcome to check out [MIT HAN LAB](https://hanlab.mit.edu) for othe
 - [**Hardware**] [SpAtten: Efficient Sparse Attention Architecture with Cascade Token and Head Pruning](https://arxiv.org/abs/2012.09852)
 
 
-## Acknowledgement
+## Acknowledgments
 
 DeepCompressor is inspired by many open-source libraries, including (but not limited to) [GPTQ](https://arxiv.org/abs/2210.17323), [QuaRot](https://arxiv.org/abs/2404.00456) and [Atom](https://arxiv.org/abs/2310.19102). 
