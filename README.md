@@ -17,7 +17,8 @@
 </p>
 
 ## News
-- [2024/11] 🔥 Our latest **W4A4** diffusion model quantization work **SVDQuant** algorithm and [**Nunchaku**](https://github.com/mit-han-lab/nunchaku) system is publicly released! Check our [paper](http://arxiv.org/abs/2411.05007)!
+- [2025/01] 🎉 [**SVDQuant**](https://arxiv.org/abs/2411.05007) has been accepted to ICLR 2025!
+- [2024/11] 🔥 Our latest **W4A4** diffusion model quantization work [**SVDQuant**](https://arxiv.org/abs/2411.05007) algorithm and [**Nunchaku**](https://github.com/mit-han-lab/nunchaku) system is publicly released! Check our [paper](http://arxiv.org/abs/2411.05007)!
 - [2024/05] 🔥 Our latest **W4A8KV4** LLM quantization work **QoQ** algorithm and **QServe** system is publicly released! **QoQ** is short for *quattuor-octō-quattuor* which is 4-8-4 in latin. Check our [paper](https://arxiv.org/abs/2405.04532)!
 
 ## Key Features
@@ -189,5 +190,3 @@ You are also welcome to check out [MIT HAN Lab](https://hanlab.mit.edu) for othe
 ## Acknowledgments
 
 DeepCompressor is inspired by many open-source libraries, including (but not limited to) [GPTQ](https://arxiv.org/abs/2210.17323), [QuaRot](https://arxiv.org/abs/2404.00456) and [Atom](https://arxiv.org/abs/2310.19102). 
-
-We use [clean-fid](https://github.com/GaParmar/clean-fid) for FID computation and [torchmetrics](https://github.com/Lightning-AI/torchmetrics) for CLIP Score, CLIP IQA, LPIPS, PSNR, SSIM. We also thank [ImageReward](https://github.com/THUDM/ImageReward) for their excellent metric.
