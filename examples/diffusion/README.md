@@ -9,7 +9,7 @@ Diffusion models have been proven highly effective at generating high-quality im
 
 ## Usage
 
-We use Flux.1-Schnell as an example.
+We use Flux.1-schnell as an example.
 
 ### Step 1: Evaluation Baselines Preparation
 
@@ -46,7 +46,7 @@ python -m deepcompressor.app.diffusion.ptq \
 ```
 
 In this command,
-- The positional arguments are configuration files which are loaded in order. [`configs/svdquant/int4`](configs/svdquant/int4.yaml) contains the quantization configurations specialized in INT4 SVDQuant. Please make sure all configuration files are under a subfolder of the working directory where you run the command.
+- The positional arguments are configuration files which are loaded in order. [`configs/svdquant/int4.yaml`](configs/svdquant/int4.yaml) contains the quantization configurations specialized in INT4 SVDQuant. Please make sure all configuration files are under a subfolder of the working directory where you run the command. You can use [`configs/svdquant/fast_int4.yaml`](configs/svdquant/fast_int4.yaml) to for fast quantization.
 - All configurations can be directly set in either YAML file or command line. Please refer to [`configs/__default__.yaml`](configs/llm.yaml) and `python -m deepcompressor.app.diffusion.ptq -h`.
 - The default evaluation datasets are [1024](configs/__default__.yaml#14) samples from [MJHQ](configs/__default__.yaml#33) and [DCI](configs/__default__.yaml#34).
 - If you would like to save quantized model checkpoint, please add `--save-model true` or `--save-model /PATH/TO/CHECKPOINT/DIR` in the command.
@@ -86,11 +86,13 @@ Below is the quality and similarity evaluated with 5000 samples from MJHQ-30K da
 
 If you find `deepcompressor` useful or relevant to your research, please kindly cite our paper:
 
-```
-@article{li2024svdquant,
+```bibtex
+@inproceedings{
+  li2024svdquant,
   title={SVDQuant: Absorbing Outliers by Low-Rank Components for 4-Bit Diffusion Models},
-  author={Li*, Muyang, and Lin*, Yujun and Zhang, Zhekai and Cai, Tianle and Li, Xiuyu and Guo, Junxian and Xie, Enze and Meng, Chenlin and Zhu, Jun-Yan and Han, Song},
-  journal={arXiv preprint arXiv:2411.05007},
-  year={2024}
+  author={Li*, Muyang and Lin*, Yujun and Zhang*, Zhekai and Cai, Tianle and Li, Xiuyu and Guo, Junxian and Xie, Enze and Meng, Chenlin and Zhu, Jun-Yan and Han, Song},
+  booktitle={The Thirteenth International Conference on Learning Representations},
+  year={2025}
 }
 ```
+
