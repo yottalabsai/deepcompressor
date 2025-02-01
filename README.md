@@ -189,3 +189,5 @@ You are also welcome to check out [MIT HAN Lab](https://hanlab.mit.edu) for othe
 ## Acknowledgments
 
 DeepCompressor is inspired by many open-source libraries, including (but not limited to) [GPTQ](https://arxiv.org/abs/2210.17323), [QuaRot](https://arxiv.org/abs/2404.00456) and [Atom](https://arxiv.org/abs/2310.19102). 
+
+We use [clean-fid](https://github.com/GaParmar/clean-fid) for FID computation and [torchmetrics](https://github.com/Lightning-AI/torchmetrics) for CLIP Score, CLIP IQA, LPIPS, PSNR, SSIM. We also thank [ImageReward](https://github.com/THUDM/ImageReward) for their excellent metric.
