@@ -58,7 +58,11 @@ def rotate_llm(  # noqa: C901
             size += m.weight.numel() / 1e9
     for linear in linears:
         linear.to(dtype=torch.float32, device="cpu" if size > 30 else None)
-    assert model.config.do_norm_before, "Rotation is only supported for models with norm before matmul."
+
+    for block in model.iter_transformer_block_structs():
+        assert not block.post_attn_norms, "Rotation is only supported for models without post-attention norms."
+        assert not block.post_ffn_norm, "Rotation is only supported for models without post-FFN norms."
+
     logger = tools.logging.getLogger(f"{__name__}.Rotate")
     backbone = model.backbone_struct
     layers = backbone.layer_structs
@@ -83,7 +87,7 @@ def rotate_llm(  # noqa: C901
             logger.debug(f"- Transforming norm and linear in {layer.name}")
             transform_norm_and_linear(
                 parent=layer.module,
-                norm_name=layer.attn_norm_rname,
+                norm_name=layer.pre_attn_norm_rname,
                 next_modules=layer.attn_struct.qkv_proj,
                 prev_modules=prev_modules,
                 prev_out_channels_dims=prev_out_channels_dims,
@@ -92,7 +96,7 @@ def rotate_llm(  # noqa: C901
             prev_out_channels_dims = 0
             transform_norm_and_linear(
                 parent=layer.module,
-                norm_name=layer.ffn_norm_rname,
+                norm_name=layer.pre_ffn_norm_rname,
                 next_modules=layer.ffn_struct.up_projs
                 + ([layer.ffn_struct.moe_gate] if layer.ffn_struct.moe_gate is not None else []),
                 prev_modules=prev_modules,
@@ -130,8 +134,9 @@ def rotate_llm(  # noqa: C901
         rotation = rotation.to(weight.device)
         rotate_in_channels(weight, rotation=rotation)
     # endregion
-    out_proj, down_proj = [], []
+    down_proj = []
     # region rotate backbone layers
+    head_rotation = get_rotation_matrix(model.config.num_head_channels, random=config.random)
     with tools.logging.redirect_tqdm():
         for layer in tqdm(layers, desc="Rotating backbone layers", dynamic_ncols=True):
             logger.debug(f"- Rotating {layer.name}")
@@ -145,7 +150,10 @@ def rotate_llm(  # noqa: C901
             rotation = rotation.to(attn.out_proj.weight.device)
             rotate_out_channels(attn.out_proj.weight, rotation=rotation, bias=attn.out_proj.bias)
             if attn.out_proj_key in config.transforms:
-                out_proj.append(attn.out_proj)
+                logger.debug(f"- Rotating {attn.v_proj_name} (out)")
+                rotate_out_channels(attn.v_proj.weight, rotation=head_rotation, bias=attn.v_proj.bias)
+                logger.debug(f"- Rotating {attn.o_proj_name} (in)")
+                rotate_in_channels(attn.o_proj.weight, rotation=head_rotation)
             for fc_name, fc in zip(ffn.up_proj_names, ffn.up_projs, strict=True):
                 logger.debug(f"- Rotating {fc_name} (in)")
                 rotation = rotation.to(fc.weight.device)
@@ -172,9 +180,6 @@ def rotate_llm(  # noqa: C901
         rotation = rotation.to(weight.device)
         rotate_out_channels(weight, rotation=rotation, bias=backbone.proj_out.bias)
     # endregion
-    if out_proj:
-        logger.debug(f"- Applying Hadamard transform on {backbone.name}.out_proj (in)")
-        hadamard_in_channels(out_proj)
     if down_proj:
         logger.debug(f"- Applying Hadamard transform on {backbone.name}.down_proj (in)")
         hadamard_in_channels(down_proj)

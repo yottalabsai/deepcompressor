@@ -69,6 +69,10 @@ class LlmQuantizerConfig(SkipBasedConfig, ProgressiveQuantizerConfig):
         """Whether quantization dynamic range calibration is enabled."""
         return self.calib_range is not None
 
+    @property
+    def needs_calib_data(self) -> bool:
+        return self.enabled_calib_range and (self.calib_range.needs_search or self.static)
+
     def generate_calib_dirname(self) -> str:
         """Generate the name for quantization calibration.
 
@@ -115,10 +119,6 @@ class LlmWeightQuantizerConfig(LlmQuantizerConfig):
 
     static: bool = field(init=False, default=True)
 
-    @property
-    def needs_calib_data(self) -> bool:
-        return self.enabled_gptq or (self.enabled_calib_range and self.calib_range.needs_search)
-
 
 @configclass
 @dataclass
@@ -146,10 +146,6 @@ class LlmActivationQuantizerConfig(LlmQuantizerConfig):
     intermediate_levels: tp.Sequence[int] = field(init=False, default=())
     needs_dequant_saturation: bool = field(init=False, default=False)
     kernel_gptq: None = field(init=False, default=None)
-
-    @property
-    def needs_calib_data(self) -> bool:
-        return self.enabled_calib_range and (self.calib_range.needs_search or self.static)
 
 
 @configclass

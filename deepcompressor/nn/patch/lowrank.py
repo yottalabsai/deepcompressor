@@ -35,7 +35,9 @@ class LowRankBranch(nn.Module):
                 nn.init.kaiming_uniform_(self.a.weight)
                 nn.init.zeros_(self.b.weight)
             return
-        assert weight.ndim == 2, "LinearLoRAHook only supports 2D input tensor"
+        if weight.ndim >= 2:
+            assert weight.shape[2:].numel() == 1, "LinearLoRAHook only supports 2D input tensor"
+        weight = weight.view(weight.shape[0], -1)
         device, dtype = weight.device, weight.dtype
         self.to(device=device, dtype=dtype)
         out_features, in_features = weight.shape
@@ -68,7 +70,19 @@ class LowRankBranch(nn.Module):
         if self.a is None:
             return None
         else:
-            return self.alpha * self.b(self.a(input))
+            if input.ndim <= 3:
+                return self.alpha * self.b(self.a(input))
+            else:
+                assert input.ndim == 4
+                assert input.shape[-1] != self.in_features
+                assert input.shape[1] == self.in_features
+                # [B, C, H, W] -> [B, H, W, C] -> [B, H * W, C]
+                B, C, H, W = input.shape
+                input = input.permute(0, 2, 3, 1).reshape(B, H * W, C)
+                output = self.alpha * self.b(self.a(input))
+                # [B, H * W, C] -> [B, H, W, C] -> [B, C, H, W]
+                output = output.reshape(B, H, W, -1).permute(0, 3, 1, 2)
+                return output
 
     def as_hook(
         self,

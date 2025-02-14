@@ -58,6 +58,8 @@ class SmoothCalibConfig(SearchBasedCalibConfig):
             Whether to enable reshaping the tensor before calibration.
         outputs_device (`str`, *optional*, default=`"cpu"`):
             The device to store the precomputed outputs of the module.
+        fuse_when_possible (`bool`, *optional*, default=`True`):
+            Whether to fuse smooth scale whenever possible.
         allow_a_quant (`bool`, *optional*, default=`True`):
             Whether to allow the quantization for alpha tensor.
         allow_b_quant (`bool`, *optional*, default=`True`):
@@ -74,6 +76,7 @@ class SmoothCalibConfig(SearchBasedCalibConfig):
             Whether to allow quantization low-rank branch during calibration.
     """
 
+    fuse_when_possible: bool = True
     allow_a_quant: bool = True
     allow_b_quant: bool = True
     spans: list[tuple[SmoothSpanMode, SmoothSpanMode]] = field(
@@ -242,6 +245,8 @@ class SmoothCalibConfig(SearchBasedCalibConfig):
             names.append(f"g{self.num_grids}.a{alpha}.b{beta}")
         if self.allow_low_rank:
             names[-1] += ".lr"
+        if not self.fuse_when_possible:
+            names[-1] += ".nf"
         disallows = []
         if not self.allow_a_quant:
             disallows.append("a")

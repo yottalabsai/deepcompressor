@@ -8,7 +8,7 @@ import pprint
 import traceback
 
 import torch
-from transformers import PreTrainedModel, PreTrainedTokenizer
+from transformers import GenerationConfig, PreTrainedModel, PreTrainedTokenizer
 
 from deepcompressor.utils import tools
 
@@ -114,9 +114,11 @@ def ptq(  # noqa: C901
             load_from = load_path.rotation
         elif cache and cache.path.rotation and os.path.exists(cache.path.rotation):
             load_from = cache.path.rotation
+        elif os.path.exists(config.rotation.path):
+            load_from = config.rotation.path
         if load_from:
             logger.info(f"- Loading rotation from {load_from}")
-            rotation = torch.load(load_from)
+            rotation = torch.load(load_from).to(dtype=torch.float64)
             rotate_llm(model, config.rotation, rotation=rotation)
         else:
             logger.info("- Generating rotation")
@@ -362,8 +364,17 @@ def main(config: LlmPtqRunConfig, logging_level: int = tools.logging.DEBUG) -> N
     # region evaluate model
     if not config.skip_eval:
         logger.info("* Evaluating model")
+        eos_token_ids = GenerationConfig.from_pretrained(config.model.path).eos_token_id
+        if not isinstance(eos_token_ids, list):
+            eos_token_ids = [eos_token_ids]
         tools.logging.Formatter.indent_inc()
-        results = config.eval.evaluate(model, tokenizer, model_name=config.model.name)
+        results = config.eval.evaluate(
+            model,
+            tokenizer,
+            model_name=config.model.name,
+            eos_token_ids=eos_token_ids,
+            output_dirpath=config.output.get_running_job_path("eval"),
+        )
         tools.logging.Formatter.indent_dec()
         logger.info(f"* Saving results to {config.output.job_dirpath}")
         # dump results

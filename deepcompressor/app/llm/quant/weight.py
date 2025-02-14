@@ -137,7 +137,7 @@ def quantize_llm_weights(
     quantizer_state_dict = quantizer_state_dict or {}
     scale_state_dict: dict[str, torch.Tensor | float | None] = {}
     with tools.logging.redirect_tqdm():
-        if not quantizer_state_dict and config.wgts.needs_calib_data:
+        if config.wgts.enabled_gptq or (not quantizer_state_dict and config.wgts.needs_calib_data):
             for _, (layer, layer_cache, layer_kwargs) in tqdm(
                 config.calib.build_loader(tokenizer).iter_layer_activations(
                     model,

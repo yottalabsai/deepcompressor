@@ -30,9 +30,9 @@ class AttentionConfigStruct:
 
     Args:
         hidden_size (`int`):
-            The size of the input/output activations, i.e., the number of input channels.
+            The size (i.e., #channels) of the input/output activations.
         add_hidden_size (`int`):
-            The size of the additional input activations, i.e., the number of additional input channels.
+            The size (i.e., #channels) of the additional activations.
         inner_size (`int`):
             The size of the inner activations, i.e., the number of **query** channels.
         num_query_heads (`int`):
@@ -43,8 +43,8 @@ class AttentionConfigStruct:
             Whether to apply normalization to queries and keys.
         with_rope (`bool`, *optional*, defaults to `True`):
             Whether to use Rotary Positional Encoding (RoPE).
-        do_norm_before (`bool`, *optional*, defaults to `True`):
-            Whether to apply normalization before the projection.
+        linear_attn (`bool`, *optional*, defaults to `False`):
+            Whether to use linear attention.
     """
 
     hidden_size: int
@@ -54,7 +54,7 @@ class AttentionConfigStruct:
     num_key_value_heads: int
     with_qk_norm: bool = False
     with_rope: bool = True
-    do_norm_before: bool = True
+    linear_attn: bool = False
 
     @property
     def head_size(self) -> int:
@@ -110,8 +110,6 @@ class FeedForwardConfigStruct:
             The activation function for the intermediate activations in the feedforward network.
         num_experts (`int`, *optional*, defaults to `1`):
             Number of experts.
-        do_norm_before (`bool`, *optional*, defaults to `True`):
-            Whether to apply normalization before the projection.
 
     Attributes:
         intermediate_lowerbound (`float` or `None`):
@@ -122,7 +120,6 @@ class FeedForwardConfigStruct:
     intermediate_size: int
     intermediate_act_type: str
     num_experts: int = 1
-    do_norm_before: bool = True
 
     @property
     def num_channels(self) -> int:
@@ -592,38 +589,52 @@ class TransformerBlockStruct(BaseModuleStruct):
     """Whether the feed-forward modules are parallel to the attention modules."""
 
     # region child modules
-    attn_norms: list[nn.Module] = field(repr=False)
+    pre_attn_norms: list[nn.Module] = field(repr=False)
     """Pre-attention normalization layers."""
-    add_attn_norms: list[nn.Module] = field(repr=False)
-    """Additional pre-attention normalization layers."""
+    pre_attn_add_norms: list[nn.Module] = field(repr=False)
+    """Pre-attention additional normalization layers."""
     attns: list[nn.Module] = field(repr=False)
     """Attention modules."""
-    ffn_norm: nn.Module | None = field(repr=False)
+    post_attn_norms: list[nn.Module] = field(repr=False)
+    """Post-attention normalization layers."""
+    post_attn_add_norms: list[nn.Module] = field(repr=False)
+    """Post-attention additional normalization layers."""
+    pre_ffn_norm: nn.Module | None = field(repr=False)
     """Pre-feed-forward normalization."""
     ffn: nn.Module | None = field(repr=False)
     """Feed-forward module."""
-    add_ffn_norm: nn.Module | None = field(repr=False)
-    """Additional pre-feed-forward normalization."""
+    post_ffn_norm: nn.Module | None = field(repr=False)
+    """Post-feed-forward normalization."""
+    pre_add_ffn_norm: nn.Module | None = field(repr=False)
+    """Pre-additional-feed-forward normalization."""
     add_ffn: nn.Module | None = field(repr=False)
     """Additional feed-forward module."""
+    post_add_ffn_norm: nn.Module | None = field(repr=False)
+    """Post-additional-feed-forward normalization."""
     # endregion
     # region relative names
-    attn_norm_rnames: list[str]
-    add_attn_norm_rnames: list[str]
+    pre_attn_norm_rnames: list[str]
+    pre_attn_add_norm_rnames: list[str]
     attn_rnames: list[str]
-    ffn_norm_rname: str
+    post_attn_norm_rnames: list[str]
+    post_attn_add_norm_rnames: list[str]
+    pre_ffn_norm_rname: str
     ffn_rname: str
-    add_ffn_norm_rname: str
+    post_ffn_norm_rname: str
+    pre_add_ffn_norm_rname: str
     add_ffn_rname: str
+    post_add_ffn_norm_rname: str
     # endregion
     # region absolute names
-    attn_norm_names: list[str] = field(init=False, repr=False)
-    add_attn_norm_names: list[str] = field(init=False, repr=False)
+    pre_attn_norm_names: list[str] = field(init=False, repr=False)
+    pre_attn_add_norm_names: list[str] = field(init=False, repr=False)
     attn_names: list[str] = field(init=False, repr=False)
-    ffn_norm_name: str = field(init=False, repr=False)
+    pre_ffn_norm_name: str = field(init=False, repr=False)
     ffn_name: str = field(init=False, repr=False)
-    add_ffn_norm_name: str = field(init=False, repr=False)
+    post_ffn_norm_name: str = field(init=False, repr=False)
+    pre_add_ffn_norm_name: str = field(init=False, repr=False)
     add_ffn_name: str = field(init=False, repr=False)
+    post_add_ffn_norm_name: str = field(init=False, repr=False)
     # endregion
     # region child structs
     attn_structs: list[AttentionStruct] = field(init=False, repr=False)
@@ -635,15 +646,28 @@ class TransformerBlockStruct(BaseModuleStruct):
         super().__post_init__()
         assert issubclass(self.attn_struct_cls, AttentionStruct)
         assert issubclass(self.ffn_struct_cls, FeedForwardStruct)
-        assert len(self.attn_norms) == len(self.attns) == len(self.attn_norm_rnames) == len(self.attn_rnames)
-        assert len(self.add_attn_norms) == len(self.add_attn_norm_rnames)
-        self.attn_norm_names = [join_name(self.name, rname) for rname in self.attn_norm_rnames]
-        self.add_attn_norm_names = [join_name(self.name, rname) for rname in self.add_attn_norm_rnames]
+        # region assertions
+        assert len(self.attns) == len(self.attn_rnames)
+        assert len(self.pre_attn_norms) == len(self.pre_attn_norm_rnames)
+        assert len(self.pre_attn_add_norms) == len(self.pre_attn_add_norm_rnames)
+        assert len(self.post_attn_norms) == len(self.post_attn_norm_rnames)
+        assert len(self.post_attn_add_norms) == len(self.post_attn_add_norm_rnames)
+        if self.pre_attn_norms:
+            assert len(self.pre_attn_norms) == len(self.attns)
+        if self.post_attn_norms:
+            assert len(self.post_attn_norms) == len(self.attns)
+        # endregion
+        self.pre_attn_norm_names = [join_name(self.name, rname) for rname in self.pre_attn_norm_rnames]
+        self.pre_attn_add_norm_names = [join_name(self.name, rname) for rname in self.pre_attn_add_norm_rnames]
         self.attn_names = [join_name(self.name, rname) for rname in self.attn_rnames]
-        self.ffn_norm_name = join_name(self.name, self.ffn_norm_rname)
+        self.post_attn_norm_names = [join_name(self.name, rname) for rname in self.post_attn_norm_rnames]
+        self.post_attn_add_norm_names = [join_name(self.name, rname) for rname in self.post_attn_add_norm_rnames]
+        self.pre_ffn_norm_name = join_name(self.name, self.pre_ffn_norm_rname)
         self.ffn_name = join_name(self.name, self.ffn_rname)
-        self.add_ffn_norm_name = join_name(self.name, self.add_ffn_norm_rname)
+        self.post_ffn_norm_name = join_name(self.name, self.post_ffn_norm_rname)
+        self.pre_add_ffn_norm_name = join_name(self.name, self.pre_add_ffn_norm_rname)
         self.add_ffn_name = join_name(self.name, self.add_ffn_rname)
+        self.post_add_ffn_norm_name = join_name(self.name, self.post_add_ffn_norm_rname)
         self.attn_structs = [
             self.attn_struct_cls.construct(
                 attn, parent=self, fname="attn", rname=self.attn_rnames[idx], rkey=self.attn_rkey, idx=idx
@@ -664,13 +688,15 @@ class TransformerBlockStruct(BaseModuleStruct):
             self.add_ffn = self.add_ffn_struct.module
         else:
             self.add_ffn_struct = None
-        if self.add_attn_norms:
-            num_add_attn_norms = len(self.add_attn_norms)
-            assert len(self.attns) >= num_add_attn_norms
+        if self.pre_attn_add_norms or self.post_attn_add_norms:
+            assert len(self.attns) >= len(self.pre_attn_add_norms) and len(self.attns) >= len(self.post_attn_add_norms)
             for i, attn in enumerate(self.attn_structs):
-                if i < num_add_attn_norms:
+                if i < len(self.pre_attn_add_norms):
                     if attn.is_self_attn():
-                        assert self.add_attn_norms[i] is None, "self attention cannot have additional norm"
+                        assert self.pre_attn_add_norms[i] is None, "self attention cannot have additional norm"
+                elif i < len(self.post_attn_add_norms):
+                    if attn.is_self_attn():
+                        assert self.post_attn_add_norms[i] is None, "self attention cannot have additional norm"
                 else:
                     assert attn.is_self_attn(), "cross or joint attention must have additional norm"
         else:

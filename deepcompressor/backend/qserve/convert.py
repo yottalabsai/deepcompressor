@@ -17,7 +17,6 @@ def convert_to_qserve_w4x8y16_linear_state_dict(
     weight: torch.Tensor,
     scale: torch.Tensor,
     zero: torch.Tensor,
-    group_size: int = -1,
     subscale: torch.Tensor | None = None,
     zero_pre_scaled: bool = False,
 ) -> dict[str, torch.Tensor]:
@@ -32,8 +31,6 @@ def convert_to_qserve_w4x8y16_linear_state_dict(
             scale tensor for the weight tensor.
         zero (`torch.Tensor`):
             zero point tensor for the weight tensor.
-        group_size (`int`, *optional*, defaults to `-1`):
-            quantization group size.
         subscale (`torch.Tensor` or `None`, *optional*, defaults to `None`):
             subscale tensor for the weight tensor.
         zero_pre_scaled (`bool`, *optional*, defaults to `False`):
@@ -45,7 +42,7 @@ def convert_to_qserve_w4x8y16_linear_state_dict(
     """
     module_name = param_name[:-7]
     weight, scale, zero, subscale = convert_to_qserve_w4x8y16_linear_weight(
-        weight, scale=scale, zero=zero, group_size=group_size, subscale=subscale, zero_pre_scaled=zero_pre_scaled
+        weight, scale=scale, zero=zero, subscale=subscale, zero_pre_scaled=zero_pre_scaled
     )
     state_dict: dict[str, torch.Tensor] = {}
     state_dict[f"{module_name}.qweight"] = weight.cpu()
@@ -84,10 +81,7 @@ def convert_to_qserve_w8x8y16_linear_state_dict(
 
 
 def convert_to_qserve_state_dict(
-    state_dict: dict[str, torch.Tensor],
-    scale_dict: dict[str, torch.Tensor],
-    weight_bits: int,
-    group_size: int = -1,
+    state_dict: dict[str, torch.Tensor], scale_dict: dict[str, torch.Tensor], weight_bits: int
 ) -> dict[str, torch.Tensor]:
     assert weight_bits in [4, 8], "weight bits should be 4 or 8."
     scales: dict[str, dict[tuple[int, ...], torch.Tensor]] = {}
@@ -134,7 +128,6 @@ def convert_to_qserve_state_dict(
                         weight,
                         scale=scale,
                         zero=zero,
-                        group_size=group_size,
                         subscale=subscale,
                         zero_pre_scaled=zero_pre_scaled,
                     )
@@ -142,7 +135,6 @@ def convert_to_qserve_state_dict(
             else:
                 assert zero is None, "zero point tensor is not supported for W8 quantization."
                 assert subscale is None, "subscale tensor is not supported for W8 quantization."
-                assert group_size == -1, "group size should be -1 for W8 quantization."
                 converted.update(convert_to_qserve_w8x8y16_linear_state_dict(param_name, weight, scale=scale))
         else:
             if isinstance(param, torch.Tensor):
@@ -158,7 +150,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--quant-path", type=str, required=True, help="path to the quantization checkpoint directory.")
     parser.add_argument("--weight-bits", type=int, required=True, help="quantized weight bits.")
-    parser.add_argument("--group-size", type=int, default=-1, help="quantization group size.")
     parser.add_argument("--output-root", type=str, default="", help="root to the output checkpoint directory.")
     parser.add_argument("--model-name", type=str, default=None, help="name of the model.")
     parser.add_argument("--model-path", type=str, default=None, help="path to the huggingface model directory.")
@@ -178,7 +169,6 @@ if __name__ == "__main__":
         model_name = args.model_name
     assert model_name, "model name is required."
     model_name = f"{model_name}-w{args.weight_bits}a8"
-    model_name += f"-g{args.group_size}" if args.group_size > 0 else "-gchn"
     output_dirpath = os.path.join(args.output_root, model_name)
     output_path = os.path.join(output_dirpath, "quant_model.pt")
     state_dict = torch.load(
@@ -186,9 +176,7 @@ if __name__ == "__main__":
         map_location="cuda" if torch.cuda.is_available() and torch.cuda.device_count() > 0 else "cpu",
     )
     scale_dict = torch.load(os.path.join(args.quant_path, "scale.pt"), map_location="cpu")
-    converted = convert_to_qserve_state_dict(
-        state_dict, scale_dict, weight_bits=args.weight_bits, group_size=args.group_size
-    )
+    converted = convert_to_qserve_state_dict(state_dict, scale_dict, weight_bits=args.weight_bits)
     os.makedirs(output_dirpath, exist_ok=True)
     torch.save(converted, output_path)
     if args.model_path and os.path.exists(args.model_path):

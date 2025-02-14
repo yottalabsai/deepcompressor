@@ -7,6 +7,7 @@ import traceback
 import torch
 from diffusers import DiffusionPipeline
 
+from deepcompressor.app.llm.nn.patch import patch_attention, patch_gemma_rms_norm
 from deepcompressor.app.llm.ptq import ptq as llm_ptq
 from deepcompressor.utils import tools
 
@@ -16,6 +17,7 @@ from .quant import (
     load_diffusion_weights_state_dict,
     quantize_diffusion_activations,
     quantize_diffusion_weights,
+    rotate_diffusion,
     smooth_diffusion,
 )
 
@@ -100,6 +102,14 @@ def ptq(  # noqa: C901
         )
     else:
         save_model = False
+
+    if quant and config.enabled_rotation:
+        logger.info("* Rotating model for quantization")
+        tools.logging.Formatter.indent_inc()
+        rotate_diffusion(model, config=config)
+        tools.logging.Formatter.indent_dec()
+        gc.collect()
+        torch.cuda.empty_cache()
 
     # region smooth quantization
     if quant and config.enabled_smooth:
@@ -288,27 +298,28 @@ def main(config: DiffusionPtqRunConfig, logging_level: int = tools.logging.DEBUG
     logger.info("* Building diffusion model pipeline")
     tools.logging.Formatter.indent_inc()
     pipeline = config.pipeline.build()
-    model = DiffusionModelStruct.construct(pipeline)
-    tools.logging.Formatter.indent_dec()
-    save_dirpath = os.path.join(config.output.running_job_dirpath, "cache")
-    if config.save_model:
-        if config.save_model.lower() in ("false", "none", "null", "nil"):
-            save_model = False
-        elif config.save_model.lower() in ("true", "default"):
-            save_dirpath, save_model = os.path.join(config.output.running_job_dirpath, "model"), True
+    if "nf4" not in config.pipeline.name and "gguf" not in config.pipeline.name:
+        model = DiffusionModelStruct.construct(pipeline)
+        tools.logging.Formatter.indent_dec()
+        save_dirpath = os.path.join(config.output.running_job_dirpath, "cache")
+        if config.save_model:
+            if config.save_model.lower() in ("false", "none", "null", "nil"):
+                save_model = False
+            elif config.save_model.lower() in ("true", "default"):
+                save_dirpath, save_model = os.path.join(config.output.running_job_dirpath, "model"), True
+            else:
+                save_dirpath, save_model = config.save_model, True
         else:
-            save_dirpath, save_model = config.save_model, True
-    else:
-        save_model = False
-    model = ptq(
-        model,
-        config.quant,
-        cache=config.cache,
-        load_dirpath=config.load_from,
-        save_dirpath=save_dirpath,
-        copy_on_save=config.copy_on_save,
-        save_model=save_model,
-    )
+            save_model = False
+        model = ptq(
+            model,
+            config.quant,
+            cache=config.cache,
+            load_dirpath=config.load_from,
+            save_dirpath=save_dirpath,
+            copy_on_save=config.copy_on_save,
+            save_model=save_model,
+        )
     if config.pipeline.lora is not None:
         load_from = ""
         if config.quant.enabled_smooth:
@@ -323,6 +334,8 @@ def main(config: DiffusionPtqRunConfig, logging_level: int = tools.logging.DEBUG
     if config.text is not None and config.text.is_enabled():
         for encoder_name, encoder, tokenizer in config.pipeline.extract_text_encoders(pipeline):
             logger.info(f"* Post-training quantizing the text encoder {encoder_name}")
+            patch_attention(encoder)
+            patch_gemma_rms_norm(encoder)
             save_dirpath = os.path.join(save_dirpath, "encoder")
             setattr(
                 pipeline,
@@ -345,12 +358,12 @@ def main(config: DiffusionPtqRunConfig, logging_level: int = tools.logging.DEBUG
         if not config.skip_gen:
             logger.info("* Generating image")
             tools.logging.Formatter.indent_inc()
-            config.eval.generate(pipeline)
+            config.eval.generate(pipeline, task=config.pipeline.task)
             tools.logging.Formatter.indent_dec()
     else:
         logger.info(f"* Evaluating model {'(skipping generation)' if config.skip_gen else ''}")
         tools.logging.Formatter.indent_inc()
-        results = config.eval.evaluate(pipeline, skip_gen=config.skip_gen)
+        results = config.eval.evaluate(pipeline, skip_gen=config.skip_gen, task=config.pipeline.task)
         tools.logging.Formatter.indent_dec()
         if results is not None:
             logger.info(f"* Saving results to {config.output.job_dirpath}")

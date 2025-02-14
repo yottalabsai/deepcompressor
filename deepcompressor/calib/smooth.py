@@ -139,6 +139,8 @@ def get_smooth_scale(*, alpha_base: torch.Tensor, beta_base: torch.Tensor, alpha
     else:
         smooth_scale = beta_base.pow(-beta)
     smooth_scale[smooth_scale == 0] = 1
+    if smooth_scale.isnan().any() or smooth_scale.isinf().any():
+        smooth_scale = smooth_scale.fill_(1)
     assert not smooth_scale.isnan().any(), "The smooth scale contains NaN."
     assert not smooth_scale.isinf().any(), "The smooth scale contains Inf."
     return smooth_scale
@@ -605,7 +607,7 @@ class SmoothCalibrator(SearchBasedCalibrator[SmoothCalibConfig, torch.Tensor]):
                 )
             if splits:
                 wgts_splits: list[list[nn.Parameter]] = split_sequence(wgts, splits)
-                mods_splits: list[list : nn.Module] = split_sequence(mods, splits)
+                mods_splits: list[list[nn.Module]] = split_sequence(mods, splits)
             else:
                 wgts_splits, mods_splits = [wgts], [mods]
             for wgts_split, mods_split in zip(wgts_splits, mods_splits, strict=True):
@@ -1004,6 +1006,8 @@ def smooth_linear_modules(
         if isinstance(prevs, nn.Module):
             prevs = [prevs]
         for module in prevs:
+            if module is None:
+                continue
             downscale = downscale.to(device=module.weight.device)
             smooth_downscale_param(module.weight, downscale, channels_dim=0)
             if hasattr(module, "bias") and module.bias is not None:

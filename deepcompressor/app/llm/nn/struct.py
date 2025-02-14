@@ -1,11 +1,23 @@
 # -*- coding: utf-8 -*-
 """Utility functions for Large Language Models."""
 
+# region imports
 import typing as tp
 from dataclasses import dataclass, field
 
 import torch.nn as nn
 from transformers import PreTrainedModel
+from transformers.models.gemma2.modeling_gemma2 import (
+    Gemma2Attention,
+    Gemma2Config,
+    Gemma2DecoderLayer,
+    Gemma2FlashAttention2,
+    Gemma2ForCausalLM,
+    Gemma2ForSequenceClassification,
+    Gemma2MLP,
+    Gemma2Model,
+    Gemma2SdpaAttention,
+)
 from transformers.models.llama.modeling_llama import (
     LlamaAttention,
     LlamaConfig,
@@ -73,7 +85,10 @@ from deepcompressor.nn.struct.attn import (
 from deepcompressor.nn.struct.base import BaseModuleStruct
 from deepcompressor.utils.common import join_name
 
-from .rope import RotaryEmbedding
+from .patch import RotaryEmbedding
+
+# endregion
+
 
 __all__ = [
     "LlmConfigStruct",
@@ -84,31 +99,41 @@ __all__ = [
     "LlmFeedForwardStruct",
 ]
 
-ATTENTION_CLS = (
-    LlamaAttention
-    | MistralAttention
-    | MixtralAttention
-    | Qwen2Attention
-    | T5Attention
-    | LlamaFlashAttention2
-    | MistralFlashAttention2
-    | MixtralFlashAttention2
-    | Qwen2FlashAttention2
-    | LlamaSdpaAttention
-    | MistralSdpaAttention
-    | MixtralSdpaAttention
-    | Qwen2SdpaAttention
-)
-FEEDFORWARD_CLS = LlamaMLP | MistralMLP | MixtralSparseMoeBlock | Qwen2MLP | T5DenseActDense | T5DenseGatedActDense
-TRANSFORMER_BLOCK_CLS = LlamaDecoderLayer | MistralDecoderLayer | MixtralDecoderLayer | Qwen2DecoderLayer | T5Block
-TRANSFORMER_CLS = tp.Union[LlamaModel, MistralModel, MixtralModel, Qwen2Model, T5Stack]
-CASUALLM_CLS = tp.Union[LlamaForCausalLM, MistralForCausalLM, MixtralForCausalLM, Qwen2ForCausalLM]
+# region type aliases
+ATTENTION_CLS = tp.Union[
+    LlamaAttention,
+    MistralAttention,
+    MixtralAttention,
+    Qwen2Attention,
+    T5Attention,
+    LlamaFlashAttention2,
+    MistralFlashAttention2,
+    MixtralFlashAttention2,
+    Qwen2FlashAttention2,
+    LlamaSdpaAttention,
+    MistralSdpaAttention,
+    MixtralSdpaAttention,
+    Qwen2SdpaAttention,
+    Gemma2Attention,
+    Gemma2FlashAttention2,
+    Gemma2SdpaAttention,
+]
+FEEDFORWARD_CLS = tp.Union[
+    LlamaMLP, MistralMLP, MixtralSparseMoeBlock, Qwen2MLP, T5DenseActDense, T5DenseGatedActDense, Gemma2MLP
+]
+TRANSFORMER_BLOCK_CLS = tp.Union[
+    LlamaDecoderLayer, MistralDecoderLayer, MixtralDecoderLayer, Qwen2DecoderLayer, T5Block, Gemma2DecoderLayer
+]
+TRANSFORMER_CLS = tp.Union[LlamaModel, MistralModel, MixtralModel, Qwen2Model, T5Stack, Gemma2Model]
+CASUALLM_CLS = tp.Union[LlamaForCausalLM, MistralForCausalLM, MixtralForCausalLM, Qwen2ForCausalLM, Gemma2ForCausalLM]
 SEQCLSLM_CLS = tp.Union[
     LlamaForSequenceClassification,
     MistralForSequenceClassification,
     MixtralForSequenceClassification,
     Qwen2ForSequenceClassification,
+    Gemma2ForSequenceClassification,
 ]
+# endregion
 
 
 @dataclass(kw_only=True)
@@ -134,8 +159,6 @@ class LlmTransformerBlockConfigStruct(FeedForwardConfigStruct, AttentionConfigSt
             Whether to apply normalization to queries and keys.
         with_rope (`bool`):
             Whether to use Rotary Positional Encoding (RoPE).
-        do_norm_before (`bool`):
-            Whether to apply layer normalization before the projection.
 
     Attributes:
         head_size (`int`):
@@ -172,8 +195,6 @@ class LlmTransformerConfigStruct(LlmTransformerBlockConfigStruct):
             Whether to apply normalization to queries and keys.
         with_rope (`bool`):
             Whether to use Rotary Positional Encoding (RoPE).
-        do_norm_before (`bool`):
-            Whether to apply layer normalization before the projection.
         vocab_size (`int`):
             The size of the vocabulary.
         num_hidden_layers (`int`):
@@ -215,8 +236,6 @@ class LlmConfigStruct(LlmTransformerConfigStruct):
             Whether to apply normalization to queries and keys.
         with_rope (`bool`):
             Whether to use Rotary Positional Encoding (RoPE).
-        do_norm_before (`bool`):
-            Whether to apply layer normalization before the projection.
         vocab_size (`int`):
             The size of the vocabulary.
         num_hidden_layers (`int`):
@@ -280,7 +299,7 @@ class LlmSelfAttentionStruct(SelfAttentionStruct):
                 "use_cache",
                 "output_attentions",
             )
-        elif isinstance(module, (LlamaAttention, MistralAttention, MixtralAttention, Qwen2Attention)):
+        elif isinstance(module, (LlamaAttention, MistralAttention, MixtralAttention, Qwen2Attention, Gemma2Attention)):
             with_rope, num_query_heads, num_key_value_heads = True, module.num_heads, module.num_key_value_heads
             q_proj, k_proj, v_proj, o_proj = module.q_proj, module.k_proj, module.v_proj, module.o_proj
             q_proj_rname, k_proj_rname, v_proj_rname, o_proj_rname = "q_proj", "k_proj", "v_proj", "o_proj"
@@ -312,7 +331,6 @@ class LlmSelfAttentionStruct(SelfAttentionStruct):
             num_key_value_heads=num_key_value_heads,
             with_qk_norm=False,
             with_rope=with_rope,
-            do_norm_before=True,
         )
         if parent is not None and parent.config is not None:
             assert parent.config.hidden_size == config.hidden_size
@@ -321,7 +339,6 @@ class LlmSelfAttentionStruct(SelfAttentionStruct):
             assert parent.config.num_key_value_heads == config.num_key_value_heads
             assert parent.config.with_qk_norm == config.with_qk_norm
             assert parent.config.with_rope == config.with_rope
-            assert parent.config.do_norm_before == config.do_norm_before
         return LlmSelfAttentionStruct(
             module=module,
             parent=parent,
@@ -365,7 +382,7 @@ class LlmFeedForwardStruct(FeedForwardStruct):
         idx: int = 0,
         **kwargs,
     ) -> "LlmFeedForwardStruct":
-        if isinstance(module, (LlamaMLP, MistralMLP, Qwen2MLP)):
+        if isinstance(module, (LlamaMLP, MistralMLP, Qwen2MLP, Gemma2MLP)):
             if parent is not None:
                 assert parent.config.intermediate_act_type.endswith("_glu")
                 act_type = parent.config.intermediate_act_type
@@ -427,14 +444,12 @@ class LlmFeedForwardStruct(FeedForwardStruct):
             intermediate_size=up_projs[0].weight.shape[0],
             intermediate_act_type=act_type,
             num_experts=len(experts),
-            do_norm_before=True,
         )
         if parent is not None and parent.config is not None:
             assert parent.config.hidden_size == config.hidden_size
             assert parent.config.intermediate_size == config.intermediate_size
             assert parent.config.intermediate_act_type == config.intermediate_act_type
             assert parent.config.num_experts == config.num_experts
-            assert parent.config.do_norm_before == config.do_norm_before
         return LlmFeedForwardStruct(
             module=module,
             parent=parent,
@@ -471,14 +486,18 @@ class LlmTransformerBlockStruct(TransformerBlockStruct):
     config: LlmTransformerBlockConfigStruct = field(default=None)
 
     # region child modules
-    add_attn_norms: list[nn.LayerNorm] = field(init=False, repr=False, default_factory=list)
-    add_ffn_norm: None = field(init=False, repr=False, default=None)
+    pre_attn_add_norms: list[nn.LayerNorm] = field(init=False, repr=False, default_factory=list)
+    post_attn_add_norms: list[nn.LayerNorm] = field(init=False, repr=False, default_factory=list)
+    pre_add_ffn_norm: None = field(init=False, repr=False, default=None)
     add_ffn: None = field(init=False, repr=False, default=None)
+    post_add_ffn_norm: None = field(init=False, repr=False, default=None)
     # endregion
     # region relative names
-    add_attn_norm_rnames: list[str] = field(init=False, repr=False, default_factory=list)
-    add_ffn_norm_rname: str = field(init=False, repr=False, default="")
+    pre_attn_add_norm_rnames: list[str] = field(init=False, repr=False, default_factory=list)
+    post_attn_add_norm_rnames: list[str] = field(init=False, repr=False, default_factory=list)
+    pre_add_ffn_norm_rname: str = field(init=False, repr=False, default="")
     add_ffn_rname: str = field(init=False, repr=False, default="")
+    post_add_ffn_norm_rname: str = field(init=False, repr=False, default="")
     # endregion
     # region child structs
     attn_structs: list[LlmSelfAttentionStruct] = field(init=False, repr=False)
@@ -489,28 +508,40 @@ class LlmTransformerBlockStruct(TransformerBlockStruct):
     # region aliases
 
     @property
-    def attn_norm(self) -> nn.LayerNorm:
-        return self.attn_norms[0]
+    def pre_attn_norm(self) -> nn.LayerNorm | None:
+        return self.pre_attn_norms[0] if self.pre_attn_norms else None
 
     @property
     def attn(self) -> nn.Module:
         return self.attns[0]
 
     @property
-    def attn_norm_rname(self) -> str:
-        return self.attn_norm_rnames[0]
+    def post_attn_norm(self) -> nn.LayerNorm | None:
+        return self.post_attn_norms[0] if self.post_attn_norms else None
+
+    @property
+    def pre_attn_norm_rname(self) -> str:
+        return self.pre_attn_norm_rnames[0] if self.pre_attn_norm_rnames else ""
 
     @property
     def attn_rname(self) -> str:
         return self.attn_rnames[0]
 
     @property
-    def attn_norm_name(self) -> str:
-        return self.attn_norm_names[0]
+    def post_attn_norm_rname(self) -> str:
+        return self.post_attn_norm_rnames[0] if self.post_attn_norm_rnames else ""
+
+    @property
+    def pre_attn_norm_name(self) -> str:
+        return self.pre_attn_norm_names[0] if self.pre_attn_norm_names else ""
 
     @property
     def attn_name(self) -> str:
         return self.attn_names[0]
+
+    @property
+    def post_attn_norm_name(self) -> str:
+        return self.post_attn_norm_names[0] if self.post_attn_norm_names else ""
 
     @property
     def attn_struct(self) -> LlmSelfAttentionStruct:
@@ -522,7 +553,6 @@ class LlmTransformerBlockStruct(TransformerBlockStruct):
         super().__post_init__()
         assert len(self.attn_structs) == 1
         if self.config is None:
-            assert self.attn_struct.config.do_norm_before == self.ffn_struct.config.do_norm_before
             self.config = LlmTransformerBlockConfigStruct(
                 hidden_size=self.attn_struct.config.hidden_size,
                 inner_size=self.attn_struct.config.inner_size,
@@ -530,7 +560,6 @@ class LlmTransformerBlockStruct(TransformerBlockStruct):
                 num_key_value_heads=self.attn_struct.config.num_key_value_heads,
                 with_qk_norm=self.attn_struct.config.with_qk_norm,
                 with_rope=self.attn_struct.config.with_rope,
-                do_norm_before=self.attn_struct.config.do_norm_before,
                 intermediate_size=self.ffn_struct.config.intermediate_size,
                 intermediate_act_type=self.ffn_struct.config.intermediate_act_type,
                 num_experts=self.ffn_struct.config.num_experts,
@@ -547,29 +576,37 @@ class LlmTransformerBlockStruct(TransformerBlockStruct):
         idx: int = 0,
         **kwargs,
     ) -> "LlmTransformerBlockStruct":
-        if isinstance(module, (LlamaDecoderLayer, MistralDecoderLayer, Qwen2DecoderLayer, MixtralDecoderLayer)):
-            attn_norm, attn = module.input_layernorm, module.self_attn
-            attn_norm_rname, attn_rname = "input_layernorm", "self_attn"
-            ffn_norm = module.post_attention_layernorm
-            ffn_norm_rname = "post_attention_layernorm"
+        if isinstance(
+            module, (LlamaDecoderLayer, MistralDecoderLayer, Qwen2DecoderLayer, MixtralDecoderLayer, Gemma2DecoderLayer)
+        ):
+            pre_attn_norms, attns = [module.input_layernorm], [module.self_attn]
+            pre_attn_norm_rnames, attn_rnames = ["input_layernorm"], ["self_attn"]
+            if isinstance(module, Gemma2DecoderLayer):
+                post_attn_norms, post_attn_norm_rnames = [module.post_attention_layernorm], ["post_attention_layernorm"]
+                pre_ffn_norm, pre_ffn_norm_rname = (module.pre_feedforward_layernorm, "pre_feedforward_layernorm")
+                post_ffn_norm, post_ffn_norm_rname = module.post_feedforward_layernorm, "post_feedforward_layernorm"
+            else:
+                post_attn_norms, post_attn_norm_rnames = [], []
+                pre_ffn_norm, pre_ffn_norm_rname = module.post_attention_layernorm, "post_attention_layernorm"
+                post_ffn_norm, post_ffn_norm_rname = None, ""
             if isinstance(module, MixtralDecoderLayer):
                 ffn, ffn_rname = module.block_sparse_moe, "block_sparse_moe"
             else:
                 ffn, ffn_rname = module.mlp, "mlp"
-            attn_norms, attns = [attn_norm], [attn]
-            attn_norm_rnames, attn_rnames = [attn_norm_rname], [attn_rname]
         elif isinstance(module, T5Block):
-            attn_norms, attns, attn_norm_rnames, attn_rnames = [], [], [], []
+            pre_attn_norms, attns, pre_attn_norm_rnames, attn_rnames = [], [], [], []
+            post_attn_norms, post_attn_norm_rnames = [], []
+            post_ffn_norm, post_ffn_norm_rname = None, ""
             for i, layer in enumerate(module.layer):
                 if isinstance(layer, T5LayerSelfAttention):
-                    attn_norms.append(layer.layer_norm)
+                    pre_attn_norms.append(layer.layer_norm)
                     attns.append(layer.SelfAttention)
-                    attn_norm_rnames.append(f"layer.{i}.layer_norm")
+                    pre_attn_norm_rnames.append(f"layer.{i}.layer_norm")
                     attn_rnames.append(f"layer.{i}.SelfAttention")
                 else:
                     assert isinstance(layer, T5LayerFF)
-                    ffn_norm, ffn = layer.layer_norm, layer.DenseReluDense
-                    ffn_norm_rname, ffn_rname = f"layer.{i}.layer_norm", f"layer.{i}.DenseReluDense"
+                    pre_ffn_norm, ffn = layer.layer_norm, layer.DenseReluDense
+                    pre_ffn_norm_rname, ffn_rname = f"layer.{i}.layer_norm", f"layer.{i}.DenseReluDense"
         else:
             raise ValueError(f"Unsupported layer type: {type(module)}")
         config = parent.config if parent is not None and parent.config is not None else None
@@ -581,14 +618,18 @@ class LlmTransformerBlockStruct(TransformerBlockStruct):
             rname=rname,
             rkey=rkey,
             config=config,
-            attn_norms=attn_norms,
+            pre_attn_norms=pre_attn_norms,
             attns=attns,
-            ffn_norm=ffn_norm,
+            post_attn_norms=post_attn_norms,
+            pre_ffn_norm=pre_ffn_norm,
             ffn=ffn,
-            attn_norm_rnames=attn_norm_rnames,
+            post_ffn_norm=post_ffn_norm,
+            pre_attn_norm_rnames=pre_attn_norm_rnames,
             attn_rnames=attn_rnames,
-            ffn_norm_rname=ffn_norm_rname,
+            post_attn_norm_rnames=post_attn_norm_rnames,
+            pre_ffn_norm_rname=pre_ffn_norm_rname,
             ffn_rname=ffn_rname,
+            post_ffn_norm_rname=post_ffn_norm_rname,
         )
 
 
@@ -672,7 +713,6 @@ class LlmTransformerStruct(BaseTransformerStruct):
                 num_key_value_heads=ref_config.num_key_value_heads,
                 with_qk_norm=ref_config.with_qk_norm,
                 with_rope=ref_config.with_rope,
-                do_norm_before=ref_config.do_norm_before,
                 intermediate_size=ref_config.intermediate_size,
                 intermediate_act_type=ref_config.intermediate_act_type,
                 num_experts=ref_config.num_experts,
@@ -712,7 +752,7 @@ class LlmTransformerStruct(BaseTransformerStruct):
         idx: int = 0,
         **kwargs,
     ) -> "LlmTransformerStruct":
-        if isinstance(module, (LlamaModel, MistralModel, MixtralModel, Qwen2Model)):
+        if isinstance(module, (LlamaModel, MistralModel, MixtralModel, Qwen2Model, Gemma2Model)):
             embed_tokens, embed_positions = module.embed_tokens, None
             layers = module.layers
             norm_in, norm_out = None, module.norm
@@ -868,15 +908,16 @@ class LlmModelStruct(BaseModuleStruct):
         else:
             raise ValueError(f"Unsupported model type: {type(model)}")
         config = backbone.config
-        if isinstance(config, (LlamaConfig, MistralConfig, MixtralConfig, Qwen2Config)):
+        if isinstance(config, (LlamaConfig, MistralConfig, MixtralConfig, Qwen2Config, Gemma2Config)):
             config_struct = LlmConfigStruct(
                 hidden_size=config.hidden_size,
-                inner_size=config.hidden_size,
+                inner_size=config.num_attention_heads * config.head_dim
+                if isinstance(config, Gemma2Config)
+                else config.hidden_size,
                 num_query_heads=config.num_attention_heads,
                 num_key_value_heads=config.num_key_value_heads,
                 with_qk_norm=False,
                 with_rope=True,
-                do_norm_before=True,
                 intermediate_size=config.intermediate_size,
                 intermediate_act_type=f"{config.hidden_act}_glu".lower(),
                 num_experts=getattr(config, "num_local_experts", 1),
@@ -891,7 +932,6 @@ class LlmModelStruct(BaseModuleStruct):
                 num_query_heads=config.num_heads,
                 num_key_value_heads=config.num_heads,
                 with_rope=False,
-                do_norm_before=True,
                 intermediate_size=config.d_ff,
                 intermediate_act_type=config.dense_act_fn.lower(),
                 num_experts=1,

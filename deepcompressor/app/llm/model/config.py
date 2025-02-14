@@ -11,7 +11,7 @@ from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer, PreTra
 from deepcompressor.data.utils.dtype import eval_dtype
 from deepcompressor.utils.config.model import BaseModelConfig
 
-from ..nn.rope import patch_attention
+from ..nn.patch import patch_attention, patch_gemma_rms_norm
 
 __all__ = ["LlmModelConfig"]
 
@@ -34,6 +34,8 @@ class LlmModelConfig(BaseModelConfig):
             Local root directory path for models.
         dtype (`torch.dtype`, *optional*, defaults to `None`):
             Data type of the model. If not specified, the original data type of the model will be used.
+        fast_tokenizer (`bool`, *optional*, defaults to `True`):
+            Whether to use fast tokenizer.
 
     Attributes:
         size (`float`):
@@ -47,6 +49,8 @@ class LlmModelConfig(BaseModelConfig):
     size: float = field(init=False)
     variant: str = field(init=False)
     dtype: torch.dtype = field(default_factory=lambda s=None: eval_dtype(s, with_quant_dtype=False))
+    use_flash_attn: bool = False
+    fast_tokenizer: bool = True
     orig_dtype: torch.dtype = field(init=False)
 
     def __post_init__(self):
@@ -109,7 +113,9 @@ class LlmModelConfig(BaseModelConfig):
         """
         torch_dtype = self.dtype
         if self.name in self._model_factories:
-            return self._model_factories[self.name](self.path, torch_dtype=torch_dtype)
+            return self._model_factories[self.name](
+                self.path, torch_dtype=torch_dtype, use_fast=self.fast_tokenizer, use_flash_attn=self.use_flash_attn
+            )
         kwargs = {"torch_dtype": torch_dtype}
         if torch.cuda.is_available() and torch.cuda.device_count() > 0:
             kwargs["device_map"] = "balanced"
@@ -128,9 +134,14 @@ class LlmModelConfig(BaseModelConfig):
                 Model and tokenizer.
         """
         config = AutoConfig.from_pretrained(path)
-        tokenizer = AutoTokenizer.from_pretrained(path)
+        tokenizer = AutoTokenizer.from_pretrained(path, trust_remote_code=True, use_fast=kwargs.pop("use_fast", True))
+        if "use_flash_attn" in kwargs:
+            use_flash_attn = kwargs.pop("use_flash_attn")
+            if use_flash_attn:
+                kwargs["attn_implementation"] = "flash_attention_2"
         model = AutoModelForCausalLM.from_pretrained(path, config=config, **kwargs)
         patch_attention(model)
+        patch_gemma_rms_norm(model)
         model.eval()
         return model, tokenizer
 

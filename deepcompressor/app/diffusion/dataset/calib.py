@@ -11,11 +11,19 @@ import torch.nn as nn
 import torch.utils.data
 from diffusers.models.attention import JointTransformerBlock
 from diffusers.models.attention_processor import Attention
-from diffusers.models.transformers.transformer_flux import FluxSingleTransformerBlock, FluxTransformerBlock
+from diffusers.models.transformers.transformer_flux import (
+    FluxSingleTransformerBlock,
+    FluxTransformerBlock,
+)
 from omniconfig import configclass
 
-from deepcompressor.data.cache import IOTensorsCache, ModuleForwardInput, TensorCache, TensorsCache
-from deepcompressor.data.utils.reshape import AttentionInputReshapeFn, LinearReshapeFn, ReshapeFn
+from deepcompressor.data.cache import (
+    IOTensorsCache,
+    ModuleForwardInput,
+    TensorCache,
+    TensorsCache,
+)
+from deepcompressor.data.utils.reshape import AttentionInputReshapeFn, LinearReshapeFn
 from deepcompressor.dataset.action import CacheAction, ConcatCacheAction
 from deepcompressor.dataset.cache import BaseCalibCacheLoader
 from deepcompressor.dataset.config import BaseDataLoaderConfig
@@ -113,9 +121,6 @@ class DiffusionConcatCacheAction(ConcatCacheAction):
                         encoder_hidden_states_cache.reshape = AttentionInputReshapeFn(encoder_channels_dim)
                 else:
                     assert encoder_hidden_states_cache.channels_dim == encoder_channels_dim
-            if tensors["image_rotary_emb"] is None:
-                tensors.pop("image_rotary_emb")
-                cache.tensors.pop("image_rotary_emb")
             hidden_states, hidden_states_cache = tensors["hidden_states"], cache.tensors["hidden_states"]
             channels_dim = 1 if hidden_states.dim() == 4 else -1
             if hidden_states_cache.channels_dim is None:
@@ -163,7 +168,6 @@ class DiffusionCalibCacheLoader(BaseCalibCacheLoader):
                     OrderedDict(
                         hidden_states=TensorCache(channels_dim=-1, reshape=LinearReshapeFn()),
                         temb=TensorCache(channels_dim=1, reshape=LinearReshapeFn()),
-                        image_rotary_emb=TensorCache(channels_dim=1, reshape=ReshapeFn()),
                     )
                 ),
                 outputs=TensorCache(channels_dim=-1, reshape=LinearReshapeFn()),
@@ -174,7 +178,6 @@ class DiffusionCalibCacheLoader(BaseCalibCacheLoader):
                     OrderedDict(
                         hidden_states=TensorCache(channels_dim=None, reshape=None),
                         encoder_hidden_states=TensorCache(channels_dim=None, reshape=None),
-                        image_rotary_emb=TensorCache(channels_dim=1, reshape=ReshapeFn()),
                     ),
                 ),
                 outputs=TensorCache(channels_dim=None, reshape=None),
@@ -211,7 +214,6 @@ class DiffusionCalibCacheLoader(BaseCalibCacheLoader):
         kwargs = {k: v for k, v in kwargs.items()}  # noqa: C416
         if "res_hidden_states_tuple" in kwargs:
             kwargs["res_hidden_states_tuple"] = None
-            # tree_map(lambda x: x.detach().cpu(), kwargs["res_hidden_states_tuple"])
         if "hidden_states" in kwargs:
             hidden_states = kwargs.pop("hidden_states")
             assert len(args) == 0, f"Invalid args: {args}"
@@ -333,7 +335,6 @@ class DiffusionCalibCacheLoader(BaseCalibCacheLoader):
             layer_kwargs.pop("hidden_states", None)
             layer_kwargs.pop("encoder_hidden_states", None)
             layer_kwargs.pop("temb", None)
-            layer_kwargs.pop("image_rotary_emb", None)
             layer_struct = layer_structs[layer_idx]
             if isinstance(layer_struct, DiffusionBlockStruct):
                 assert layer_struct.name == layer_name

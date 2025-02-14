@@ -6,8 +6,11 @@ import typing as tp
 
 import torch
 import torch.nn as nn
-from diffusers.models.transformers.pixart_transformer_2d import PixArtTransformer2DModel
-from diffusers.models.transformers.transformer_flux import FluxTransformer2DModel
+from diffusers.models.transformers import (
+    FluxTransformer2DModel,
+    PixArtTransformer2DModel,
+    SanaTransformer2DModel,
+)
 from diffusers.models.unets.unet_2d_condition import UNet2DConditionModel
 
 from deepcompressor.utils.common import tree_map, tree_split
@@ -51,7 +54,7 @@ class CollectHook:
             # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
             timesteps = timesteps.expand(sample.shape[0])
             input_kwargs["timestep"] = timesteps
-        elif isinstance(module, PixArtTransformer2DModel):
+        elif isinstance(module, (PixArtTransformer2DModel, SanaTransformer2DModel)):
             new_args.append(input_kwargs.pop("hidden_states"))
         elif isinstance(module, FluxTransformer2DModel):
             new_args.append(input_kwargs.pop("hidden_states"))

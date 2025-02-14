@@ -86,14 +86,25 @@ def calibrate_diffusion_block_low_rank_branch(  # noqa: C901
                 eval_module = wrap_joint_attn(eval_module, indexes=1)
         else:
             eval_module, eval_name, eval_kwargs = module, module_name, None
+        if isinstance(modules[0], nn.Linear):
+            assert all(isinstance(m, nn.Linear) for m in modules)
+            channels_dim = -1
+        else:
+            assert all(isinstance(m, nn.Conv2d) for m in modules)
+            channels_dim = 1
         quantizer = DiffusionWeightQuantizer(config.wgts, develop_dtype=config.develop_dtype, key=module_key)
         if quantizer.is_enabled() and quantizer.is_enabled_low_rank():
-            assert isinstance(module, nn.Linear), "Only Linear modules are supported for low-rank branch calibration"
+            if isinstance(module, nn.Conv2d):
+                assert module.weight.shape[2:].numel()
+            else:
+                assert isinstance(module, nn.Linear)
             if module_name not in branch_state_dict:
                 logger.debug("- Calibrating low-rank branch for %s", ", ".join(module_names))
                 tools.logging.Formatter.indent_inc()
                 branch_state_dict[module_name] = quantizer.calibrate_low_rank(
-                    input_quantizer=DiffusionActivationQuantizer(config.ipts, key=module_key, channels_dim=-1),
+                    input_quantizer=DiffusionActivationQuantizer(
+                        config.ipts, key=module_key, channels_dim=channels_dim
+                    ),
                     modules=modules,
                     inputs=layer_cache[module_name].inputs if layer_cache else None,
                     eval_inputs=layer_cache[eval_name].inputs if layer_cache else None,
@@ -123,10 +134,10 @@ def calibrate_diffusion_block_low_rank_branch(  # noqa: C901
                     branch.b.to(dtype=module.weight.dtype, device=module.weight.device)
                     branch.b.weight.copy_(shared_branch.b.weight[oc_idx : oc_idx + module.weight.shape[0]])
                     oc_idx += module.weight.shape[0]
-                    module.weight.data.sub_(branch.get_effective_weight())
+                    module.weight.data.sub_(branch.get_effective_weight().view(module.weight.data.shape))
                     branch.as_hook().register(module)
             else:
-                module.weight.data.sub_(shared_branch.get_effective_weight())
+                module.weight.data.sub_(shared_branch.get_effective_weight().view(module.weight.data.shape))
                 shared_branch.as_hook().register(module)
             del shared_branch
             gc.collect()
@@ -348,55 +359,60 @@ def quantize_diffusion_weights(
 
     skip_pre_modules = all(key in config.wgts.skips for key in model.get_prev_module_keys())
     skip_post_modules = all(key in config.wgts.skips for key in model.get_post_module_keys())
-    if not quantizer_state_dict:
-        with tools.logging.redirect_tqdm():
+    with tools.logging.redirect_tqdm():
+        if not quantizer_state_dict:
             if config.wgts.needs_calib_data:
-                for _, (layer, layer_cache, layer_kwargs) in tqdm(
-                    config.calib.build_loader().iter_layer_activations(
-                        model,
-                        needs_inputs_fn=get_needs_inputs_fn(model, config),
-                        skip_pre_modules=skip_pre_modules,
-                        skip_post_modules=skip_post_modules,
-                    ),
-                    desc="calibrating weight quantizers",
-                    leave=False,
-                    total=model.num_blocks + int(not skip_post_modules) + int(not skip_pre_modules) * 3,
-                    dynamic_ncols=True,
-                ):
-                    update_diffusion_block_weight_quantizer_state_dict(
-                        layer=layer,
-                        config=config,
-                        quantizer_state_dict=quantizer_state_dict,
-                        layer_cache=layer_cache,
-                        layer_kwargs=layer_kwargs,
-                    )
+                iterable = config.calib.build_loader().iter_layer_activations(
+                    model,
+                    needs_inputs_fn=get_needs_inputs_fn(model, config),
+                    skip_pre_modules=skip_pre_modules,
+                    skip_post_modules=skip_post_modules,
+                )
             else:
-                for _, layer in tqdm(
+                iterable = map(  # noqa: C417
+                    lambda kv: (kv[0], (kv[1], {}, {})),
                     model.get_named_layers(
                         skip_pre_modules=skip_pre_modules, skip_post_modules=skip_post_modules
                     ).items(),
-                    desc="calibrating weight quantizers",
-                    leave=False,
-                    total=model.num_blocks + int(not skip_post_modules) + int(not skip_pre_modules) * 3,
-                    dynamic_ncols=True,
-                ):
-                    update_diffusion_block_weight_quantizer_state_dict(
-                        layer=layer,
-                        config=config,
-                        quantizer_state_dict=quantizer_state_dict,
-                        layer_cache={},
-                        layer_kwargs={},
-                    )
+                )
+            for _, (layer, layer_cache, layer_kwargs) in tqdm(
+                iterable,
+                desc="calibrating weight quantizers",
+                leave=False,
+                total=model.num_blocks + int(not skip_post_modules) + int(not skip_pre_modules) * 3,
+                dynamic_ncols=True,
+            ):
+                update_diffusion_block_weight_quantizer_state_dict(
+                    layer=layer,
+                    config=config,
+                    quantizer_state_dict=quantizer_state_dict,
+                    layer_cache=layer_cache,
+                    layer_kwargs=layer_kwargs,
+                )
     scale_state_dict: dict[str, torch.Tensor | float | None] = {}
-    for _, layer in tqdm(
-        model.get_named_layers(skip_pre_modules=skip_pre_modules, skip_post_modules=skip_post_modules).items(),
+    if config.wgts.enabled_gptq:
+        iterable = config.calib.build_loader().iter_layer_activations(
+            model,
+            needs_inputs_fn=get_needs_inputs_fn(model, config),
+            skip_pre_modules=skip_pre_modules,
+            skip_post_modules=skip_post_modules,
+        )
+    else:
+        iterable = map(  # noqa: C417
+            lambda kv: (kv[0], (kv[1], {}, {})),
+            model.get_named_layers(skip_pre_modules=skip_pre_modules, skip_post_modules=skip_post_modules).items(),
+        )
+    for _, (layer, layer_cache, _) in tqdm(
+        iterable,
         desc="quantizing weights",
         leave=False,
+        total=model.num_blocks + int(not skip_post_modules) + int(not skip_pre_modules) * 3,
         dynamic_ncols=True,
     ):
         layer_scale_state_dict = quantize_diffusion_block_weights(
             layer=layer,
             config=config,
+            layer_cache=layer_cache,
             quantizer_state_dict=quantizer_state_dict,
             return_with_scale_state_dict=return_with_scale_state_dict,
         )

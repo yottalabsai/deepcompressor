@@ -9,6 +9,8 @@ from cleanfid.resize import build_resizer
 from datasets import Dataset
 from tqdm import tqdm
 
+__all__ = ["compute_fid"]
+
 
 def get_dataset_features(
     dataset: Dataset,

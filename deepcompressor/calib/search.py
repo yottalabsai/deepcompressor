@@ -339,7 +339,7 @@ class SearchBasedCalibrator(ABC, tp.Generic[_CONFIG, _CANDIDATE]):
             if x_wgts is not None:
                 assert len(orig_x_wgts) >= len(x_wgts), "orig_wgts should have at least as mtp.Any elements as wgts"
                 assert all(
-                    p is w for (p, _), w in zip(orig_x_wgts, x_wgts, strict=True)
+                    p is w for (p, _), w in zip(orig_x_wgts, x_wgts, strict=False)
                 ), "the parameters in orig_wgts should be in wgts in the same order"
         if orig_y_wgts is not None:
             assert isinstance(orig_y_wgts, (tuple, list)), "orig_y_wgts should be a list"
@@ -349,7 +349,7 @@ class SearchBasedCalibrator(ABC, tp.Generic[_CONFIG, _CANDIDATE]):
             if y_wgts is not None:
                 assert len(orig_y_wgts) >= len(y_wgts), "orig_wgts should have at least as mtp.Any elements as wgts"
                 assert all(
-                    p is w for (p, _), w in zip(orig_y_wgts, y_wgts, strict=True)
+                    p is w for (p, _), w in zip(orig_y_wgts, y_wgts, strict=False)
                 ), "the parameters in orig_wgts should be in wgts in the same order"
         if orig_x_acts is not None:
             assert isinstance(orig_x_acts, TensorsCache), "orig_x_acts should be a TensorsCache"

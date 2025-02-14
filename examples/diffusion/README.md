@@ -46,7 +46,19 @@ python -m deepcompressor.app.diffusion.ptq \
 ```
 
 In this command,
-- The positional arguments are configuration files which are loaded in order. [`configs/svdquant/int4.yaml`](configs/svdquant/int4.yaml) contains the quantization configurations specialized in INT4 SVDQuant. Please make sure all configuration files are under a subfolder of the working directory where you run the command. You can use [`configs/svdquant/fast_int4.yaml`](configs/svdquant/fast_int4.yaml) to for fast quantization.
+- The positional arguments are configuration files which are loaded in order. [`configs/svdquant/int4.yaml`](configs/svdquant/int4.yaml) contains the quantization configurations specialized in INT4 SVDQuant. Please make sure all configuration files are under a subfolder of the working directory where you run the command.
+  + You can add [`configs/svdquant/fast.yaml`](configs/svdquant/fast.yaml) to for faster quantization, i.e.,
+  ```bash
+  python -m deepcompressor.app.diffusion.ptq \
+      configs/model/flux.1-schnell.yaml configs/svdquant/int4.yaml configs/svdquant/fast.yaml \
+      --eval-benchmarks MJHQ --eval-num-samples 1024
+  ```
+  + You can add [`configs/svdquant/gptq.yaml`](configs/svdquant/gptq.yaml) to perform gptq after svdquant, i.e.,
+  ```bash
+  python -m deepcompressor.app.diffusion.ptq \
+      configs/model/flux.1-schnell.yaml configs/svdquant/int4.yaml configs/svdquant/gptq.yaml \
+      --eval-benchmarks MJHQ --eval-num-samples 1024
+  ```
 - All configurations can be directly set in either YAML file or command line. Please refer to [`configs/__default__.yaml`](configs/llm.yaml) and `python -m deepcompressor.app.diffusion.ptq -h`.
 - The default evaluation datasets are [1024](configs/__default__.yaml#14) samples from [MJHQ](configs/__default__.yaml#33) and [DCI](configs/__default__.yaml#34).
 - If you would like to save quantized model checkpoint, please add `--save-model true` or `--save-model /PATH/TO/CHECKPOINT/DIR` in the command.
@@ -54,7 +66,26 @@ In this command,
 
 ## Deployment
 
-We provide SVDQuant quantized model checkpoints in [`Nunchaku`](https://github.com/mit-han-lab/nunchaku) for your reference. Please refer to [`Nunchaku`](https://github.com/mit-han-lab/nunchaku) for further deployment on GPU system.
+If you save the SVDQuant W4A4 quantized model checkpoint, you can easily to deploy quantized model with [`Nunchaku`](https://github.com/mit-han-lab/nunchaku) engine.
+
+Please run the following command to convert the saved checkpoint to Nunchaku-compatible checkpoint:
+```bash
+python -m deepcompressor.backend.nunchaku.convert \
+  --quant-path /PATH/TO/CHECKPOINT/DIR \
+  --output-root /PATH/TO/OUTPUT/ROOT \
+  --model-name MODEL_NAME
+```
+
+After we have the Nunchaku-compatible checkpoint, please switch to Nunchaku conda environment and refer to [`Nunchaku`](https://github.com/mit-han-lab/nunchaku) for further deployment on GPU system.
+
+If you want to integrate LoRA, please run the following command to convert LoRA to Nunchaku-compatible checkpoint:
+```bash
+python -m deepcompressor.backend.nunchaku.convert_lora \
+  --quant-path /PATH/TO/NUNCHAKU/TRANSFORMER_BLOCKS/SAFETENSORS_FILE \
+  --lora-path /PATH/TO/DIFFUSERS/LORA/SAFETENSORS_FILE \
+  --output-root /PATH/TO/OUTPUT/ROOT \
+  --lora-name LORA_NAME
+```
 
 ## Evaluation Resutls
 
@@ -62,24 +93,45 @@ We provide SVDQuant quantized model checkpoints in [`Nunchaku`](https://github.c
 
 Below is the quality and similarity evaluated with 5000 samples from MJHQ-30K dataset. IR means ImageReward. Our 4-bit results outperform other 4-bit baselines, effectively preserving the visual quality of 16-bit models.
 
-| Model                      | Precision | Method  | FID ($\downarrow$) | IR ($\uparrow$) | LPIPS ($\downarrow$) | PSNR( $\uparrow$) |
-|----------------------------|-----------|---------|--------------------|-----------------|----------------------|-------------------|
-| FLUX.1-dev (50 Steps)      | BF16      | --      | 20.3               | 0.953           | --                   | --                |
-|                            | INT W8A8  | Ours    | 20.4               | 0.948           | 0.089                | 27.0              |
-|                            | W4A16     | NF4     | 20.6               | 0.910           | 0.272                | 19.5              |
-|                            | INT W4A4  | Ours    | **19.86**          | 0.932           | 0.254                | 20.1              |
-|                            | FP W4A4   | Ours    | 21.0               | **0.933**       | **0.247**            | **20.2**          |
-| FLUX.1-schnell (4 Steps)   | BF16      | --      | 19.2               | 0.938           | --                   | --                |
-|                            | INT W8A8  | Ours    | 19.2               | 0.966           | 0.120                | 22.9              |
-|                            | W4A16     | NF4     | 18.9               | 0.943           | 0.257                | 18.2              |
-|                            | INT W4A4  | Ours    | **18.4**           | **0.969**       | 0.292                | 17.5              |
-|                            | FP W4A4   | Ours    | 19.9               | 0.956           | 0.279                | 17.5              |
-|                            | FP16      | --      | 16.6               | 0.944           | --                   | --                |
-| PixArt-Sigma (20 Steps)    | INT W8A8  | ViDiT-Q | 15.7               | 0.944           | 0.137                | 22.5              |
-|                            | INT W8A8  | Ours    | 16.3               | **0.955**       | **0.109**            | **23.7**          |
-|                            | INT W4A8  | ViDiT-Q | 37.3               | 0.573           | 0.611                | 12.0              |
-|                            | INT W4A4  | Ours    | 20.1               | 0.898           | 0.394                | 16.2              |
-|                            | FP W4A4   | Ours    | **18.3**           | **0.946**       | **0.326**            | **17.4**          |
+| Model                      | Precision |  Method   | FID ($\downarrow$) | IR ($\uparrow$) | LPIPS ($\downarrow$) | PSNR( $\uparrow$) |
+|----------------------------|-----------|-----------|--------------------|-----------------|----------------------|-------------------|
+| FLUX.1-dev (50 Steps)      | BF16      | --        | 20.3               | 0.953           | --                   | --                |
+|                            | INT W8A8  | SVDQ      | 20.4               | 0.948           | 0.089                | 27.0              |
+|                            | W4A16     | NF4       | 20.6               | 0.910           | 0.272                | 19.5              |
+|                            | INT W4A4  |           | 20.2               | 0.908           | 0.322                | 18.5              |
+|                            | INT W4A4  | SVDQ      | 20.1               | 0.926           | 0.256                | 20.1              |
+|                            | INT W4A4  | SVDQ+GPTQ | 19.9               | 0.935           | 0.223                | 21.0              |
+|                            | NVFP4     |           | 20.3               | 0.961           | 0.345                | 16.3              |
+|                            | NVFP4     | SVDQ      | 20.7               | 0.934           | 0.222                | 21.0              |
+|                            | NVFP4     | SVDQ+GPTQ | 20.3               | 0.942           | 0.205                | 21.5              |
+| FLUX.1-schnell (4 Steps)   | BF16      | --        | 19.2               | 0.938           | --                   | --                |
+|                            | INT W8A8  | SVDQ      | 19.2               | 0.966           | 0.120                | 22.9              |
+|                            | W4A16     | NF4       | 18.9               | 0.943           | 0.257                | 18.2              |
+|                            | INT W4A4  |           | 18.1               | 0.962           | 0.345                | 16.3              |
+|                            | INT W4A4  | SVDQ      | 18.3               | 0.957           | 0.289                | 17.6              |
+|                            | INT W4A4  | SVDQ+GPTQ | 18.3               | 0.951           | 0.257                | 18.3              |
+|                            | NVFP4     |           | 19.0               | 0.952           | 0.276                | 17.6              |
+|                            | NVFP4     | SVDQ      | 19.0               | 0.976           | 0.247                | 18.4              |
+|                            | NVFP4     | SVDQ+GPTQ | 18.9               | 0.964           | 0.229                | 19.0              |
+| SANA-1.6b (20 Steps)       | BF16      | --        | 20.6               | 0.952           | --                   | --                |
+|                            | INT W4A4  |           | 20.5               | 0.894           | 0.339                | 15.3              |
+|                            | INT W4A4  | GPTQ      | 19.9               | 0.881           | 0.288                | 16.4              |
+|                            | INT W4A4  | SVDQ      | 19.9               | 0.922           | 0.234                | 17.4              |
+|                            | INT W4A4  | SVDQ+GPTQ | 19.3               | 0.935           | 0.220                | 17.8              |
+|                            | NVFP4     |           | 19.7               | 0.929           | 0.236                | 17.4              |
+|                            | NVFP4     | GPTQ      | 19.7               | 0.925           | 0.202                | 18.3              |
+|                            | NVFP4     | SVDQ      | 20.2               | 0.951           | 0.190                | 18.6              |
+|                            | NVFP4     | SVDQ+GPTQ | 20.2               | 0.941           | 0.176                | 19.0              |
+| PixArt-Sigma (20 Steps)    | FP16      | --        | 16.6               | 0.944           | --                   | --                |
+|                            | INT W8A8  | ViDiT-Q   | 15.7               | 0.944           | 0.137                | 22.5              |
+|                            | INT W8A8  | SVDQ      | 16.3               | 0.955           | 0.109                | 23.7              |
+|                            | INT W4A8  | ViDiT-Q   | 37.3               | 0.573           | 0.611                | 12.0              |
+|                            | INT W4A4  | SVDQ      | 19.9               | 0.858           | 0.356                | 17.0              |
+|                            | INT W4A4  | SVDQ+GPTQ | 19.2               | 0.878           | 0.323                | 17.6              |
+|                            | NVFP4     |           | 31.8               | 0.660           | 0.517                | 14.8              |
+|                            | NVFP4     | GPTQ      | 27.2               | 0.691           | 0.482                 | 15.6              |
+|                            | NVFP4     | SVDQ      | 17.3               | 0.945           | 0.290                | 18.0              |
+|                            | NVFP4     | SVDQ+GPTQ | 16.6               | 0.940           | 0.271                | 18.5              |
 
 
 ## Reference

@@ -13,6 +13,8 @@ from torchmetrics.image import (
 )
 from tqdm import tqdm
 
+__all__ = ["compute_image_similarity_metrics"]
+
 
 class MultiImageDataset(data.Dataset):
     def __init__(self, gen_dirpath: str, ref_dirpath_or_dataset: str | datasets.Dataset):
@@ -86,7 +88,7 @@ def compute_image_similarity_metrics(
             if isinstance(ref_dirpath_or_dataset, datasets.Dataset)
             else os.path.basename(ref_dirpath_or_dataset)
         ) + " similarity metrics"
-        for i, batch in enumerate(tqdm(dataloader, desc=desc)):
+        for batch in tqdm(dataloader, desc=desc):
             batch = [tensor.to(device) for tensor in batch]
             for metric in metrics.values():
                 metric.update(batch[0], batch[1])

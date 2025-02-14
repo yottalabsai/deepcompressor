@@ -15,9 +15,10 @@ from omniconfig import configclass
 from torch import multiprocessing as mp
 from tqdm import tqdm
 
+from deepcompressor.app.diffusion.dataset.data import get_dataset
 from deepcompressor.utils.common import hash_str_to_int
 
-from .benchmarks import get_dataset
+from ..utils import get_control
 from .metrics import compute_image_metrics
 
 __all__ = ["DiffusionEvalConfig"]
@@ -41,6 +42,8 @@ class DiffusionEvalConfig:
             The height of the generated images.
         width (`int`, *optional*, defaults to `None`):
             The width of the generated images.
+        clean_caption (`bool`, *optional*, defaults to `None`):
+            Whether to clean the caption.
         num_steps (`int`, *optional*, defaults to `None`):
             The number of inference steps.
         guidance_scale (`float`, *optional*, defaults to `None`):
@@ -71,6 +74,7 @@ class DiffusionEvalConfig:
 
     height: int | None = None
     width: int | None = None
+    clean_caption: bool | None = None
     num_steps: int | None = None
     guidance_scale: float | None = None
     num_samples: int = 1024
@@ -84,12 +88,13 @@ class DiffusionEvalConfig:
         metadata={omniconfig.ARGPARSE_KWARGS: {"nargs": "+", "type": str}},
     )
     ref_metrics: list[str] = field(
-        default_factory=lambda: ["psnr", "lpips", "ssim", "fid"],
+        default_factory=lambda: ["psnr", "lpips", "ssim"],
         metadata={omniconfig.ARGPARSE_KWARGS: {"nargs": "+", "type": str}},
     )
     gen_root: str = ""
     ref_root: str = ""
     gt_stats_root: str = ""
+    control_root: str | None = None
 
     chunk_start: int = 0
     chunk_step: int = 1
@@ -108,6 +113,8 @@ class DiffusionEvalConfig:
             kwargs["height"] = self.height
         if self.width is not None:
             kwargs["width"] = self.width
+        if self.clean_caption is not None:
+            kwargs["clean_caption"] = self.clean_caption
         if self.num_steps is not None:
             kwargs["num_inference_steps"] = self.num_steps
         if self.guidance_scale is not None:
@@ -122,6 +129,8 @@ class DiffusionEvalConfig:
         dirpath: str,
         logger: logging.Logger,
         dataset_name: str | None = None,
+        task: str = "text-to-image",
+        control_root: str | None = None,
     ) -> None:
         if self.num_gpus > 1:
             pipeline = pipeline.to(rank)
@@ -132,7 +141,11 @@ class DiffusionEvalConfig:
                 f" unchunk_size={dataset._unchunk_size})"
             )
         pipeline.set_progress_bar_config(
-            desc="Sampling", leave=False, dynamic_ncols=True, position=1, disable=self.num_gpus > 1
+            desc="Sampling",
+            leave=False,
+            dynamic_ncols=True,
+            position=1,
+            disable=self.num_gpus > 1,
         )
         if dataset_name is None:
             dataset_name = dataset.config_name
@@ -153,47 +166,86 @@ class DiffusionEvalConfig:
             seeds = [hash_str_to_int(name) for name in filenames]
             diffusers.training_utils.set_seed(seeds[0])
             generators = [torch.Generator().manual_seed(seed) for seed in seeds]
-            output = pipeline(prompts, generator=generators, **self.get_pipeline_kwargs())
+
+            pipeline_kwargs = self.get_pipeline_kwargs()
+
+            if task in ["canny-to-image", "depth-to-image", "inpainting"]:
+                controls = get_control(
+                    task,
+                    batch["image"],
+                    names=batch["filename"],
+                    data_root=os.path.join(control_root, f"{dataset_name}-{dataset._unchunk_size}"),
+                )
+                if task == "inpainting":
+                    pipeline_kwargs["image"] = controls[0]
+                    pipeline_kwargs["mask_image"] = controls[1]
+                else:
+                    pipeline_kwargs["control_image"] = controls
+
+            output = pipeline(prompts, generator=generators, **pipeline_kwargs)
             images = output.images
             for filename, image in zip(filenames, images, strict=True):
                 image.save(os.path.join(dirpath, f"{filename}.png"))
 
-    def generate(self, pipeline: DiffusionPipeline, gen_root: str = "") -> None:
+    def generate(
+        self,
+        pipeline: DiffusionPipeline,
+        gen_root: str = "",
+        task: str = "text-to-image",
+    ) -> None:
         logger = logging.getLogger(f"{__name__}.DiffusionEval")
         gen_root = gen_root or self.gen_root
         for benchmark in self.benchmarks:
             dataset = get_dataset(
-                benchmark, max_dataset_size=self.num_samples, chunk_start=self.chunk_start, chunk_step=self.chunk_step
+                benchmark,
+                max_dataset_size=self.num_samples,
+                chunk_start=self.chunk_start,
+                chunk_step=self.chunk_step,
+                return_gt=task in ["canny-to-image"],
+                repeat=1,
             )
             if benchmark.endswith(".yaml") or benchmark.endswith(".yml"):
                 dataset_name = os.path.splitext(os.path.basename(benchmark))[0]
-                dirpath = os.path.join(gen_root, "samples", "YAML", f"{dataset_name}-{dataset._unchunk_size}")
+                dirpath = os.path.join(
+                    gen_root,
+                    "samples",
+                    "YAML",
+                    f"{dataset_name}-{dataset._unchunk_size}",
+                )
             else:
                 dataset_name = dataset.config_name
-                dirpath = os.path.join(gen_root, "samples", benchmark, f"{dataset.config_name}-{dataset._unchunk_size}")
+                dirpath = os.path.join(
+                    gen_root,
+                    "samples",
+                    benchmark,
+                    f"{dataset.config_name}-{dataset._unchunk_size}",
+                )
             if self.chunk_only:
                 dirpath += f".{dataset._chunk_start}.{dataset._chunk_step}"
             os.makedirs(dirpath, exist_ok=True)
-            args = (dataset, pipeline, dirpath, logger, dataset_name)
+            args = (dataset, pipeline, dirpath, logger, dataset_name, task, os.path.join(self.control_root, benchmark))
             if self.num_gpus == 1:
                 self._generate(0, *args)
             else:
                 mp.spawn(self._generate, args=args, nprocs=self.num_gpus, join=True)
 
     def evaluate(
-        self, pipeline: DiffusionPipeline, gen_root: str = "", skip_gen: bool = False
+        self, pipeline: DiffusionPipeline, gen_root: str = "", skip_gen: bool = False, task: str = "text-to-image"
     ) -> dict[str, tp.Any] | None:
         gen_root = gen_root or self.gen_root
         if not skip_gen:
-            self.generate(pipeline, gen_root=gen_root)
-        return compute_image_metrics(
-            gen_root=gen_root,
-            benchmarks=self.benchmarks,
-            max_dataset_size=self.num_samples,
-            chunk_start=self.chunk_start,
-            chunk_step=self.chunk_step,
-            ref_root=self.ref_root,
-            gt_stats_root=self.gt_stats_root,
-            gt_metrics=self.gt_metrics,
-            ref_metrics=self.ref_metrics,
-        )
+            self.generate(pipeline, gen_root=gen_root, task=task)
+        if not self.chunk_only:
+            return compute_image_metrics(
+                gen_root=gen_root,
+                benchmarks=self.benchmarks,
+                max_dataset_size=self.num_samples,
+                chunk_start=self.chunk_start,
+                chunk_step=self.chunk_step,
+                ref_root=self.ref_root,
+                gt_stats_root=self.gt_stats_root,
+                gt_metrics=self.gt_metrics,
+                ref_metrics=self.ref_metrics,
+            )
+        else:
+            return {}

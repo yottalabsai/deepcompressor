@@ -54,6 +54,9 @@ quant:
     skips:
     - residual
   enable_smooth: true
+  rotation:
+    transforms:
+    - out_proj
   smooth:
     enable_proj: true
     proj:
@@ -70,6 +73,7 @@ quant:
       skips:
       - qkv_proj
       - up_proj
+      - out_proj
     enable_attn: true
     attn:
       strategy: Manual

@@ -1,10 +1,8 @@
 # -*- coding: utf-8 -*-
 """Configurations for evaluating a large language model."""
 
-import argparse
 import os
 import random
-import typing as tp
 from dataclasses import dataclass, field
 
 import numpy as np

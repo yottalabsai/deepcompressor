@@ -320,7 +320,14 @@ def reorder_llm(  # noqa: C901
         x_mods.extend(layer.ffn_struct.up_projs)
         _extend_params_(
             reorder_wgts,
-            [layer.attn_norm, layer.attn_struct.out_proj, layer.ffn_norm, *layer.ffn_struct.down_projs],
+            [
+                layer.pre_attn_norm,
+                layer.attn_struct.out_proj,
+                layer.post_attn_norm,
+                layer.pre_ffn_norm,
+                *layer.ffn_struct.down_projs,
+                layer.post_ffn_norm,
+            ],
             out_channels_dim=0,
         )
         _extend_params_(reorder_wgts, [layer.ffn_struct.moe_gate], in_channels_dim=1)

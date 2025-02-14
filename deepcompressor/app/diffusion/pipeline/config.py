@@ -6,9 +6,13 @@ import typing as tp
 from dataclasses import dataclass, field
 
 import torch
-from diffusers.pipelines import DiffusionPipeline, FluxPipeline, PixArtAlphaPipeline, PixArtSigmaPipeline
-from diffusers.pipelines import StableDiffusion3Pipeline as SD3Pipeline
-from diffusers.pipelines import StableDiffusionXLPipeline as SDXLPipeline
+from diffusers.pipelines import (
+    AutoPipelineForText2Image,
+    DiffusionPipeline,
+    FluxControlPipeline,
+    FluxFillPipeline,
+    SanaPipeline,
+)
 from omniconfig import configclass
 from torch import nn
 from transformers import PreTrainedModel, PreTrainedTokenizer, T5EncoderModel
@@ -65,13 +69,20 @@ class DiffusionPipelineConfig:
     """
 
     _pipeline_factories: tp.ClassVar[
-        dict[str, tp.Callable[[str, torch.dtype, torch.device, bool], DiffusionPipeline]]
+        dict[str, tp.Callable[[str, str, torch.dtype, torch.device, bool], DiffusionPipeline]]
     ] = {}
     _text_extractors: tp.ClassVar[
-        dict[str, tp.Callable[[DiffusionPipeline], list[tuple[str, PreTrainedModel, PreTrainedTokenizer]]]]
+        dict[
+            str,
+            tp.Callable[
+                [DiffusionPipeline, tuple[type[PreTrainedModel], ...]],
+                list[tuple[str, PreTrainedModel, PreTrainedTokenizer]],
+            ],
+        ]
     ] = {}
 
     name: str
+    path: str = ""
     dtype: torch.dtype = field(
         default_factory=lambda s=torch.float32: eval_dtype(s, with_quant_dtype=False, with_none=False)
     )
@@ -79,9 +90,17 @@ class DiffusionPipelineConfig:
     shift_activations: bool = False
     lora: LoRAConfig | None = None
     family: str = field(init=False)
+    task: str = "text-to-image"
 
     def __post_init__(self):
         self.family = self.name.split("-")[0]
+
+        if self.name == "flux.1-canny-dev":
+            self.task = "canny-to-image"
+        elif self.name == "flux.1-depth-dev":
+            self.task = "depth-to-image"
+        elif self.name == "flux.1-fill-dev":
+            self.task = "inpainting"
 
     def build(
         self, *, dtype: str | torch.dtype | None = None, device: str | torch.device | None = None
@@ -102,31 +121,35 @@ class DiffusionPipelineConfig:
             dtype = self.dtype
         if device is None:
             device = self.device
-        return self._pipeline_factories[self.name](
-            self.name, dtype=dtype, device=device, shift_activations=self.shift_activations
+        _factory = self._pipeline_factories.get(self.name, self._default_build)
+        return _factory(
+            name=self.name, path=self.path, dtype=dtype, device=device, shift_activations=self.shift_activations
         )
 
     def extract_text_encoders(
-        self, pipeline: DiffusionPipeline
+        self, pipeline: DiffusionPipeline, supported: tuple[type[PreTrainedModel], ...] = (T5EncoderModel,)
     ) -> list[tuple[str, PreTrainedModel, PreTrainedTokenizer]]:
         """Extract the text encoders and tokenizers from the pipeline.
 
         Args:
             pipeline (`DiffusionPipeline`):
                 The diffusion pipeline.
+            supported (`tuple[type[PreTrainedModel], ...]`, *optional*, defaults to `(T5EncoderModel,)`):
+                The supported text encoder types. If not specified, all text encoders will be extracted.
 
         Returns:
             `list[tuple[str, PreTrainedModel, PreTrainedTokenizer]]`:
                 The list of text encoder name, model, and tokenizer.
         """
-        return self._text_extractors[self.name](pipeline)
+        _extractor = self._text_extractors.get(self.name, self._default_extract_text_encoders)
+        return _extractor(pipeline, supported)
 
     @classmethod
     def register_pipeline_factory(
         cls,
         names: str | tuple[str, ...],
         /,
-        factory: tp.Callable[[str, torch.dtype, torch.device, bool], DiffusionPipeline],
+        factory: tp.Callable[[str, str, torch.dtype, torch.device, bool], DiffusionPipeline],
         *,
         overwrite: bool = False,
     ) -> None:
@@ -135,7 +158,7 @@ class DiffusionPipelineConfig:
         Args:
             names (`str` or `tuple[str, ...]`):
                 The name of the pipeline.
-            factory (`Callable[[str, torch.dtype, torch.device, bool], DiffusionPipeline]`):
+            factory (`Callable[[str, str,torch.dtype, torch.device, bool], DiffusionPipeline]`):
                 The pipeline factory function.
             overwrite (`bool`, *optional*, defaults to `False`):
                 Whether to overwrite the existing factory for the pipeline.
@@ -152,7 +175,10 @@ class DiffusionPipelineConfig:
         cls,
         names: str | tuple[str, ...],
         /,
-        extractor: tp.Callable[[DiffusionPipeline], list[tuple[str, PreTrainedModel, PreTrainedTokenizer]]],
+        extractor: tp.Callable[
+            [DiffusionPipeline, tuple[type[PreTrainedModel], ...]],
+            list[tuple[str, PreTrainedModel, PreTrainedTokenizer]],
+        ],
         *,
         overwrite: bool = False,
     ) -> None:
@@ -182,7 +208,6 @@ class DiffusionPipelineConfig:
         if self.lora is not None:
             logger = tools.logging.getLogger(__name__)
             logger.info(f"Load LoRA branches from {self.lora.path}")
-            assert isinstance(pipeline, FluxPipeline), "LoRA is only supported for FluxPipeline currently."
             lora_state_dict, alphas = pipeline.lora_state_dict(
                 self.lora.path, return_alphas=True, weight_name=self.lora.weight_name
             )
@@ -300,22 +325,40 @@ class DiffusionPipelineConfig:
 
     @staticmethod
     def _default_build(
-        name: str, dtype: str | torch.dtype, device: str | torch.device, shift_activations: bool
+        name: str, path: str, dtype: str | torch.dtype, device: str | torch.device, shift_activations: bool
     ) -> DiffusionPipeline:
-        if name == "sdxl":
-            pipeline = SDXLPipeline.from_pretrained(
-                "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=dtype, variant="fp16", use_safetensors=True
-            )
-        elif name == "sdxl-turbo":
-            pipeline = SDXLPipeline.from_pretrained("stabilityai/sdxl-turbo", torch_dtype=dtype, variant="fp16")
-        elif name == "pixart-sigma":
-            pipeline = PixArtSigmaPipeline.from_pretrained("PixArt-alpha/PixArt-Sigma-XL-2-1024-MS", torch_dtype=dtype)
-        elif name == "flux.1-dev":
-            pipeline = FluxPipeline.from_pretrained("black-forest-labs/FLUX.1-dev", torch_dtype=dtype)
-        elif name == "flux.1-schnell":
-            pipeline = FluxPipeline.from_pretrained("black-forest-labs/FLUX.1-schnell", torch_dtype=dtype)
+        if not path:
+            if name == "sdxl":
+                path = "stabilityai/stable-diffusion-xl-base-1.0"
+            elif name == "sdxl-turbo":
+                path = "stabilityai/sdxl-turbo"
+            elif name == "pixart-sigma":
+                path = "PixArt-alpha/PixArt-Sigma-XL-2-1024-MS"
+            elif name == "flux.1-dev":
+                path = "black-forest-labs/FLUX.1-dev"
+            elif name == "flux.1-canny-dev":
+                path = "black-forest-labs/FLUX.1-Canny-dev"
+            elif name == "flux.1-depth-dev":
+                path = "black-forest-labs/FLUX.1-Depth-dev"
+            elif name == "flux.1-fill-dev":
+                path = "black-forest-labs/FLUX.1-Fill-dev"
+            elif name == "flux.1-schnell":
+                path = "black-forest-labs/FLUX.1-schnell"
+            else:
+                raise ValueError(f"Path for {name} is not specified.")
+        if name in ["flux.1-canny-dev", "flux.1-depth-dev"]:
+            pipeline = FluxControlPipeline.from_pretrained(path, torch_dtype=dtype)
+        elif name == "flux.1-fill-dev":
+            pipeline = FluxFillPipeline.from_pretrained(path, torch_dtype=dtype)
+        elif name.startswith("sana-"):
+            if dtype == torch.bfloat16:
+                pipeline = SanaPipeline.from_pretrained(path, variant="bf16", torch_dtype=dtype, use_safetensors=True)
+                pipeline.vae.to(dtype)
+                pipeline.text_encoder.to(dtype)
+            else:
+                pipeline = SanaPipeline.from_pretrained(path, torch_dtype=dtype)
         else:
-            raise NotImplementedError
+            pipeline = AutoPipelineForText2Image.from_pretrained(path, torch_dtype=dtype)
         pipeline = pipeline.to(device)
         model = pipeline.unet if hasattr(pipeline, "unet") else pipeline.transformer
         replace_fused_linear_with_concat_linear(model)
@@ -326,35 +369,25 @@ class DiffusionPipelineConfig:
 
     @staticmethod
     def _default_extract_text_encoders(
-        pipeline: DiffusionPipeline,
+        pipeline: DiffusionPipeline, supported: tuple[type[PreTrainedModel], ...]
     ) -> list[tuple[str, PreTrainedModel, PreTrainedTokenizer]]:
         """Extract the text encoders and tokenizers from the pipeline.
 
         Args:
             pipeline (`DiffusionPipeline`):
                 The diffusion pipeline.
+            supported (`tuple[type[PreTrainedModel], ...]`, *optional*, defaults to `(T5EncoderModel,)`):
+                The supported text encoder types. If not specified, all text encoders will be extracted.
 
         Returns:
             `list[tuple[str, PreTrainedModel, PreTrainedTokenizer]]`:
                 The list of text encoder name, model, and tokenizer.
         """
-        if isinstance(pipeline, SD3Pipeline):
-            name, encoder, tokenizer = "text_encoder_3", pipeline.text_encoder_3, pipeline.tokenizer_3
-        elif isinstance(pipeline, FluxPipeline):
-            name, encoder, tokenizer = "text_encoder_2", pipeline.text_encoder_2, pipeline.tokenizer_2
-        elif isinstance(pipeline, (PixArtAlphaPipeline, PixArtSigmaPipeline)):
-            name, encoder, tokenizer = "text_encoder", pipeline.text_encoder, pipeline.tokenizer
-        else:
-            raise NotImplementedError(f"Unsupported pipeline type: {type(pipeline)}")
-        assert isinstance(encoder, T5EncoderModel)
-        return [(name, encoder, tokenizer)]
-
-
-DiffusionPipelineConfig.register_pipeline_factory(
-    ("sdxl", "sdxl-turbo", "pixart-sigma", "flux.1-dev", "flux.1-schnell"), DiffusionPipelineConfig._default_build
-)
-
-DiffusionPipelineConfig.register_text_extractor(
-    ("sdxl", "sdxl-turbo", "pixart-sigma", "flux.1-dev", "flux.1-schnell"),
-    DiffusionPipelineConfig._default_extract_text_encoders,
-)
+        results: list[tuple[str, PreTrainedModel, PreTrainedTokenizer]] = []
+        for key in vars.__dict__.keys():
+            if key.startswith("text_encoder"):
+                suffix = key[len("text_encoder") :]
+                encoder, tokenizer = getattr(pipeline, f"text_encoder{suffix}"), getattr(pipeline, f"tokenizer{suffix}")
+                if not supported or isinstance(encoder, supported):
+                    results.append((key, encoder, tokenizer))
+        return results

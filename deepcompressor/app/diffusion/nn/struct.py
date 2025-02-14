@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 import torch.nn as nn
 from diffusers.models.activations import GEGLU, GELU, ApproximateGELU, SwiGLU
 from diffusers.models.attention import BasicTransformerBlock, FeedForward, JointTransformerBlock
-from diffusers.models.attention_processor import Attention
+from diffusers.models.attention_processor import Attention, SanaLinearAttnProcessor2_0
 from diffusers.models.embeddings import (
     CombinedTimestepGuidanceTextProjEmbeddings,
     CombinedTimestepTextProjEmbeddings,
@@ -28,6 +28,7 @@ from diffusers.models.embeddings import (
 from diffusers.models.normalization import AdaLayerNormContinuous, AdaLayerNormSingle, AdaLayerNormZero
 from diffusers.models.resnet import Downsample2D, ResnetBlock2D, Upsample2D
 from diffusers.models.transformers.pixart_transformer_2d import PixArtTransformer2DModel
+from diffusers.models.transformers.sana_transformer import GLUMBConv, SanaTransformer2DModel, SanaTransformerBlock
 from diffusers.models.transformers.transformer_2d import Transformer2DModel
 from diffusers.models.transformers.transformer_flux import (
     FluxSingleTransformerBlock,
@@ -46,9 +47,12 @@ from diffusers.models.unets.unet_2d_blocks import (
 )
 from diffusers.models.unets.unet_2d_condition import UNet2DConditionModel
 from diffusers.pipelines import (
+    FluxControlPipeline,
+    FluxFillPipeline,
     FluxPipeline,
     PixArtAlphaPipeline,
     PixArtSigmaPipeline,
+    SanaPipeline,
     StableDiffusion3Pipeline,
     StableDiffusionPipeline,
     StableDiffusionXLPipeline,
@@ -75,15 +79,40 @@ from .attention import DiffusionAttentionProcessor
 __all__ = ["DiffusionModelStruct", "DiffusionBlockStruct", "DiffusionModelStruct"]
 
 
-DIT_BLOCK_CLS = tp.Union[BasicTransformerBlock, JointTransformerBlock, FluxSingleTransformerBlock, FluxTransformerBlock]
-UNET_BLOCK_CLS = tp.Union[
-    DownBlock2D, CrossAttnDownBlock2D, UNetMidBlock2D, UNetMidBlock2DCrossAttn, UpBlock2D, CrossAttnUpBlock2D
+DIT_BLOCK_CLS = tp.Union[
+    BasicTransformerBlock,
+    JointTransformerBlock,
+    FluxSingleTransformerBlock,
+    FluxTransformerBlock,
+    SanaTransformerBlock,
 ]
-DIT_CLS = tp.Union[Transformer2DModel, PixArtTransformer2DModel, SD3Transformer2DModel, FluxTransformer2DModel]
+UNET_BLOCK_CLS = tp.Union[
+    DownBlock2D,
+    CrossAttnDownBlock2D,
+    UNetMidBlock2D,
+    UNetMidBlock2DCrossAttn,
+    UpBlock2D,
+    CrossAttnUpBlock2D,
+]
+DIT_CLS = tp.Union[
+    Transformer2DModel,
+    PixArtTransformer2DModel,
+    SD3Transformer2DModel,
+    FluxTransformer2DModel,
+    SanaTransformer2DModel,
+]
 UNET_CLS = tp.Union[UNet2DModel, UNet2DConditionModel]
 MODEL_CLS = tp.Union[DIT_CLS, UNET_CLS]
 UNET_PIPELINE_CLS = tp.Union[StableDiffusionPipeline, StableDiffusionXLPipeline]
-DIT_PIPELINE_CLS = tp.Union[StableDiffusion3Pipeline, PixArtAlphaPipeline, PixArtSigmaPipeline, FluxPipeline]
+DIT_PIPELINE_CLS = tp.Union[
+    StableDiffusion3Pipeline,
+    PixArtAlphaPipeline,
+    PixArtSigmaPipeline,
+    FluxPipeline,
+    FluxControlPipeline,
+    FluxFillPipeline,
+    SanaPipeline,
+]
 PIPELINE_CLS = tp.Union[UNET_PIPELINE_CLS, DIT_PIPELINE_CLS]
 
 
@@ -328,7 +357,7 @@ class DiffusionAttentionStruct(AttentionStruct):
             q_proj_rname, k_proj_rname, v_proj_rname = "to_q", "to_k", "to_v"
             add_q_proj_rname, add_k_proj_rname, add_v_proj_rname = "add_q_proj", "add_k_proj", "add_v_proj"
             add_o_proj_rname = "to_add_out"
-        if hasattr(module, "to_out"):
+        if getattr(module, "to_out", None) is not None:
             o_proj = module.to_out[0]
             o_proj_rname = "to_out.0"
             assert isinstance(o_proj, nn.Linear)
@@ -354,7 +383,7 @@ class DiffusionAttentionStruct(AttentionStruct):
             num_key_value_heads=module.to_k.weight.shape[0] // (module.to_q.weight.shape[0] // module.heads),
             with_qk_norm=module.norm_q is not None,
             with_rope=with_rope,
-            do_norm_before=True,
+            linear_attn=isinstance(module.processor, SanaLinearAttnProcessor2_0),
         )
         return DiffusionAttentionStruct(
             module=module,
@@ -439,7 +468,7 @@ class DiffusionFeedForwardStruct(FeedForwardStruct):
 
     @staticmethod
     def _default_construct(
-        module: FeedForward | FluxSingleTransformerBlock,
+        module: FeedForward | FluxSingleTransformerBlock | GLUMBConv,
         /,
         parent: tp.Optional["DiffusionTransformerBlockStruct"] = None,
         fname: str = "",
@@ -479,6 +508,11 @@ class DiffusionFeedForwardStruct(FeedForwardStruct):
                 down_proj, down_proj_rname = layer_2, "proj_out.linears.1"
             ffn = nn.Sequential(up_proj, module.act_mlp, layer_2)
             assert not rname, f"Unsupported rname: {rname}"
+        elif isinstance(module, GLUMBConv):
+            ffn = module
+            up_proj, up_proj_rname = module.conv_inverted, "conv_inverted"
+            down_proj, down_proj_rname = module.conv_point, "conv_point"
+            act_type = "silu_conv_silu_glu"
         else:
             raise NotImplementedError(f"Unsupported module type: {type(module)}")
         config = FeedForwardConfigStruct(
@@ -486,7 +520,6 @@ class DiffusionFeedForwardStruct(FeedForwardStruct):
             intermediate_size=down_proj.weight.shape[1],
             intermediate_act_type=act_type,
             num_experts=1,
-            do_norm_before=True,
         )
         return DiffusionFeedForwardStruct(
             module=ffn,  # this may be a virtual module
@@ -513,6 +546,18 @@ class DiffusionTransformerBlockStruct(TransformerBlockStruct, DiffusionBlockStru
     # endregion
 
     parent: tp.Optional["DiffusionTransformerStruct"] = field(repr=False)
+    # region child modules
+    post_attn_norms: list[nn.LayerNorm] = field(init=False, repr=False, default_factory=list)
+    post_attn_add_norms: list[nn.LayerNorm] = field(init=False, repr=False, default_factory=list)
+    post_ffn_norm: None = field(init=False, repr=False, default=None)
+    post_add_ffn_norm: None = field(init=False, repr=False, default=None)
+    # endregion
+    # region relative names
+    post_attn_norm_rnames: list[str] = field(init=False, repr=False, default_factory=list)
+    post_attn_add_norm_rnames: list[str] = field(init=False, repr=False, default_factory=list)
+    post_ffn_norm_rname: str = field(init=False, repr=False, default="")
+    post_add_ffn_norm_rname: str = field(init=False, repr=False, default="")
+    # endregion
     # region attributes
     norm_type: str
     add_norm_type: str
@@ -522,10 +567,10 @@ class DiffusionTransformerBlockStruct(TransformerBlockStruct, DiffusionBlockStru
     add_norm_key: str = field(init=False, repr=False)
     # endregion
     # region child structs
-    attn_norm_structs: list[DiffusionModuleStruct | None] = field(init=False, repr=False)
-    add_attn_norm_structs: list[DiffusionModuleStruct | None] = field(init=False, repr=False)
-    ffn_norm_struct: DiffusionModuleStruct = field(init=False, repr=False, default=None)
-    add_ffn_norm_struct: DiffusionModuleStruct | None = field(init=False, repr=False, default=None)
+    pre_attn_norm_structs: list[DiffusionModuleStruct | None] = field(init=False, repr=False)
+    pre_attn_add_norm_structs: list[DiffusionModuleStruct | None] = field(init=False, repr=False)
+    pre_ffn_norm_struct: DiffusionModuleStruct = field(init=False, repr=False, default=None)
+    pre_add_ffn_norm_struct: DiffusionModuleStruct | None = field(init=False, repr=False, default=None)
     attn_structs: list[DiffusionAttentionStruct] = field(init=False, repr=False)
     ffn_struct: DiffusionFeedForwardStruct | None = field(init=False, repr=False)
     add_ffn_struct: DiffusionFeedForwardStruct | None = field(init=False, repr=False)
@@ -536,25 +581,27 @@ class DiffusionTransformerBlockStruct(TransformerBlockStruct, DiffusionBlockStru
         self.norm_key = join_name(self.key, self.norm_rkey, sep="_")
         self.add_norm_key = join_name(self.key, self.add_norm_rkey, sep="_")
         self.attn_norm_structs = [
-            DiffusionModuleStruct(norm, parent=self, fname="attn_norm", rname=norm_rname, rkey=self.norm_rkey, idx=idx)
-            for idx, (norm, norm_rname) in enumerate(zip(self.attn_norms, self.attn_norm_rnames, strict=True))
+            DiffusionModuleStruct(norm, parent=self, fname="pre_attn_norm", rname=rname, rkey=self.norm_rkey, idx=idx)
+            for idx, (norm, rname) in enumerate(zip(self.pre_attn_norms, self.pre_attn_norm_rnames, strict=True))
         ]
         self.add_attn_norm_structs = [
             DiffusionModuleStruct(
-                norm, parent=self, fname="add_attn_norm", rname=norm_rname, rkey=self.add_norm_rkey, idx=idx
+                norm, parent=self, fname="pre_attn_add_norm", rname=rname, rkey=self.add_norm_rkey, idx=idx
             )
-            for idx, (norm, norm_rname) in enumerate(zip(self.add_attn_norms, self.add_attn_norm_rnames, strict=True))
+            for idx, (norm, rname) in enumerate(
+                zip(self.pre_attn_add_norms, self.pre_attn_add_norm_rnames, strict=True)
+            )
         ]
-        if self.ffn_norm is not None:
-            self.ffn_norm_struct = DiffusionModuleStruct(
-                self.ffn_norm, parent=self, fname="ffn_norm", rname=self.ffn_norm_rname, rkey=self.norm_rkey
+        if self.pre_ffn_norm is not None:
+            self.pre_ffn_norm_struct = DiffusionModuleStruct(
+                self.pre_ffn_norm, parent=self, fname="pre_ffn_norm", rname=self.pre_ffn_norm_rname, rkey=self.norm_rkey
             )
-        if self.add_ffn_norm is not None:
-            self.add_ffn_norm_struct = DiffusionModuleStruct(
-                self.add_ffn_norm,
+        if self.pre_add_ffn_norm is not None:
+            self.pre_add_ffn_norm_struct = DiffusionModuleStruct(
+                self.pre_add_ffn_norm,
                 parent=self,
-                fname="add_ffn_norm",
-                rname=self.add_ffn_norm_rname,
+                fname="pre_add_ffn_norm",
+                rname=self.pre_add_ffn_norm_rname,
                 rkey=self.add_norm_rkey,
             )
 
@@ -567,14 +614,14 @@ class DiffusionTransformerBlockStruct(TransformerBlockStruct, DiffusionBlockStru
                 yield from add_attn_norm.named_key_modules()
         for attn_struct in self.attn_structs:
             yield from attn_struct.named_key_modules()
-        if self.ffn_norm_struct is not None:
-            if self.attn_norms and self.attn_norms[0] is not self.ffn_norm:
-                yield from self.ffn_norm_struct.named_key_modules()
+        if self.pre_ffn_norm_struct is not None:
+            if self.pre_attn_norms and self.pre_attn_norms[0] is not self.pre_ffn_norm:
+                yield from self.pre_ffn_norm_struct.named_key_modules()
         if self.ffn_struct is not None:
             yield from self.ffn_struct.named_key_modules()
-        if self.add_ffn_norm_struct is not None:
-            if self.add_attn_norms and self.add_attn_norms[0] is not self.add_ffn_norm:
-                yield from self.add_ffn_norm_struct.named_key_modules()
+        if self.pre_add_ffn_norm_struct is not None:
+            if self.pre_attn_add_norms and self.pre_attn_add_norms[0] is not self.pre_add_ffn_norm:
+                yield from self.pre_add_ffn_norm_struct.named_key_modules()
         if self.add_ffn_struct is not None:
             yield from self.add_ffn_struct.named_key_modules()
 
@@ -589,71 +636,74 @@ class DiffusionTransformerBlockStruct(TransformerBlockStruct, DiffusionBlockStru
         idx: int = 0,
         **kwargs,
     ) -> "DiffusionTransformerBlockStruct":
-        if isinstance(module, BasicTransformerBlock):
+        if isinstance(module, (BasicTransformerBlock, SanaTransformerBlock)):
             parallel = False
-            norm_type = add_norm_type = module.norm_type
-            attn_norms, attn_norm_rnames = [], []
+            if isinstance(module, SanaTransformerBlock):
+                norm_type = add_norm_type = "ada_norm_single"
+            else:
+                norm_type = add_norm_type = module.norm_type
+            pre_attn_norms, pre_attn_norm_rnames = [], []
             attns, attn_rnames = [], []
-            add_attn_norms, add_attn_norm_rnames = [], []
+            pre_attn_add_norms, pre_attn_add_norm_rnames = [], []
             assert module.norm1 is not None
             assert module.attn1 is not None
-            attn_norms.append(module.norm1)
-            attn_norm_rnames.append("norm1")
+            pre_attn_norms.append(module.norm1)
+            pre_attn_norm_rnames.append("norm1")
             attns.append(module.attn1)
             attn_rnames.append("attn1")
-            add_attn_norms.append(module.attn1.norm_cross)
-            add_attn_norm_rnames.append("attn1.norm_cross")
+            pre_attn_add_norms.append(module.attn1.norm_cross)
+            pre_attn_add_norm_rnames.append("attn1.norm_cross")
             if module.attn2 is not None:
                 if norm_type == "ada_norm_single":
-                    attn_norms.append(None)
-                    attn_norm_rnames.append("")
+                    pre_attn_norms.append(None)
+                    pre_attn_norm_rnames.append("")
                 else:
                     assert module.norm2 is not None
-                    attn_norms.append(module.norm2)
-                    attn_norm_rnames.append("norm2")
+                    pre_attn_norms.append(module.norm2)
+                    pre_attn_norm_rnames.append("norm2")
                 attns.append(module.attn2)
                 attn_rnames.append("attn2")
-                add_attn_norms.append(module.attn2.norm_cross)
-                add_attn_norm_rnames.append("attn2.norm_cross")
+                pre_attn_add_norms.append(module.attn2.norm_cross)
+                pre_attn_add_norm_rnames.append("attn2.norm_cross")
             if norm_type == "ada_norm_single":
                 assert module.norm2 is not None
-                ffn_norm, ffn_norm_rname = module.norm2, "norm2"
+                pre_ffn_norm, pre_ffn_norm_rname = module.norm2, "norm2"
             else:
-                ffn_norm, ffn_norm_rname = module.norm3, "" if module.norm3 is None else "norm3"
+                pre_ffn_norm, pre_ffn_norm_rname = module.norm3, "" if module.norm3 is None else "norm3"
             ffn, ffn_rname = module.ff, "" if module.ff is None else "ff"
-            add_ffn_norm, add_ffn_norm_rname, add_ffn, add_ffn_rname = None, "", None, ""
+            pre_add_ffn_norm, pre_add_ffn_norm_rname, add_ffn, add_ffn_rname = None, "", None, ""
         elif isinstance(module, JointTransformerBlock):
             parallel = False
             norm_type = "ada_norm_zero"
-            attn_norms, attn_norm_rnames = [module.norm1], ["norm1"]
+            pre_attn_norms, pre_attn_norm_rnames = [module.norm1], ["norm1"]
             if isinstance(module.norm1_context, AdaLayerNormZero):
                 add_norm_type = "ada_norm_zero"
             else:
                 add_norm_type = "ada_norm_continous"
-            add_attn_norms, add_attn_norm_rnames = [module.norm1_context], ["norm1_context"]
+            pre_attn_add_norms, pre_attn_add_norm_rnames = [module.norm1_context], ["norm1_context"]
             attns, attn_rnames = [module.attn], ["attn"]
-            ffn_norm, ffn_norm_rname = module.norm2, "norm2"
+            pre_ffn_norm, pre_ffn_norm_rname = module.norm2, "norm2"
             ffn, ffn_rname = module.ff, "ff"
-            add_ffn_norm, add_ffn_norm_rname = module.norm2_context, "norm2_context"
+            pre_add_ffn_norm, pre_add_ffn_norm_rname = module.norm2_context, "norm2_context"
             add_ffn, add_ffn_rname = module.ff_context, "ff_context"
         elif isinstance(module, FluxSingleTransformerBlock):
             parallel = True
             norm_type = add_norm_type = "ada_norm_zero_single"
-            attn_norms, attn_norm_rnames = [module.norm], ["norm"]
+            pre_attn_norms, pre_attn_norm_rnames = [module.norm], ["norm"]
             attns, attn_rnames = [module.attn], ["attn"]
-            add_attn_norms, add_attn_norm_rnames = [], []
-            ffn_norm, ffn_norm_rname = module.norm, "norm"
+            pre_attn_add_norms, pre_attn_add_norm_rnames = [], []
+            pre_ffn_norm, pre_ffn_norm_rname = module.norm, "norm"
             ffn, ffn_rname = module, ""
-            add_ffn_norm, add_ffn_norm_rname, add_ffn, add_ffn_rname = None, "", None, ""
+            pre_add_ffn_norm, pre_add_ffn_norm_rname, add_ffn, add_ffn_rname = None, "", None, ""
         elif isinstance(module, FluxTransformerBlock):
             parallel = False
             norm_type = add_norm_type = "ada_norm_zero"
-            attn_norms, attn_norm_rnames = [module.norm1], ["norm1"]
+            pre_attn_norms, pre_attn_norm_rnames = [module.norm1], ["norm1"]
             attns, attn_rnames = [module.attn], ["attn"]
-            add_attn_norms, add_attn_norm_rnames = [module.norm1_context], ["norm1_context"]
-            ffn_norm, ffn_norm_rname = module.norm2, "norm2"
+            pre_attn_add_norms, pre_attn_add_norm_rnames = [module.norm1_context], ["norm1_context"]
+            pre_ffn_norm, pre_ffn_norm_rname = module.norm2, "norm2"
             ffn, ffn_rname = module.ff, "ff"
-            add_ffn_norm, add_ffn_norm_rname = module.norm2_context, "norm2_context"
+            pre_add_ffn_norm, pre_add_ffn_norm_rname = module.norm2_context, "norm2_context"
             add_ffn, add_ffn_rname = module.ff_context, "ff_context"
         else:
             raise NotImplementedError(f"Unsupported module type: {type(module)}")
@@ -665,19 +715,19 @@ class DiffusionTransformerBlockStruct(TransformerBlockStruct, DiffusionBlockStru
             rname=rname,
             rkey=rkey,
             parallel=parallel,
-            attn_norms=attn_norms,
-            add_attn_norms=add_attn_norms,
+            pre_attn_norms=pre_attn_norms,
+            pre_attn_add_norms=pre_attn_add_norms,
             attns=attns,
-            ffn_norm=ffn_norm,
+            pre_ffn_norm=pre_ffn_norm,
             ffn=ffn,
-            add_ffn_norm=add_ffn_norm,
+            pre_add_ffn_norm=pre_add_ffn_norm,
             add_ffn=add_ffn,
-            attn_norm_rnames=attn_norm_rnames,
-            add_attn_norm_rnames=add_attn_norm_rnames,
+            pre_attn_norm_rnames=pre_attn_norm_rnames,
+            pre_attn_add_norm_rnames=pre_attn_add_norm_rnames,
             attn_rnames=attn_rnames,
-            ffn_norm_rname=ffn_norm_rname,
+            pre_ffn_norm_rname=pre_ffn_norm_rname,
             ffn_rname=ffn_rname,
-            add_ffn_norm_rname=add_ffn_norm_rname,
+            pre_add_ffn_norm_rname=pre_add_ffn_norm_rname,
             add_ffn_rname=add_ffn_rname,
             norm_type=norm_type,
             add_norm_type=add_norm_type,
@@ -971,7 +1021,6 @@ class DiffusionResnetStruct(BaseModuleStruct):
             intermediate_size=convs[0][0].weight.shape[0],
             intermediate_act_type=act_type,
             num_experts=1,
-            do_norm_before=True,
         )
         return DiffusionResnetStruct(
             module=module,
@@ -1645,63 +1694,55 @@ class DiTStruct(DiffusionModelStruct, DiffusionTransformerStruct):
     ) -> "DiTStruct":
         if isinstance(module, DIT_PIPELINE_CLS):
             module = module.transformer
-        if isinstance(module, PixArtTransformer2DModel):
-            input_embed, time_embed, text_embed = module.pos_embed, module.adaln_single, module.caption_projection
-            input_embed_rname, time_embed_rname, text_embed_rname = "pos_embed", "adaln_single", "caption_projection"
-            norm_out, norm_out_rname = module.norm_out, "norm_out"
-            proj_out, proj_out_rname = module.proj_out, "proj_out"
-            transformer_blocks, transformer_blocks_rname = module.transformer_blocks, "transformer_blocks"
-            # ! in fact, `module.adaln_single.emb` is `time_embed`, `module.adaln_single.linear` is `transformer_norm`
-            # ! but since PixArt shares the `transformer_norm`, we categorize it as `time_embed`
-            return DiTStruct(
-                module=module,
-                parent=parent,
-                fname=fname,
-                idx=idx,
-                rname=rname,
-                rkey=rkey,
-                input_embed=input_embed,
-                time_embed=time_embed,
-                text_embed=text_embed,
-                transformer_blocks=transformer_blocks,
-                norm_out=norm_out,
-                proj_out=proj_out,
-                input_embed_rname=input_embed_rname,
-                time_embed_rname=time_embed_rname,
-                text_embed_rname=text_embed_rname,
-                norm_out_rname=norm_out_rname,
-                proj_out_rname=proj_out_rname,
-                transformer_blocks_rname=transformer_blocks_rname,
-            )
-        elif isinstance(module, SD3Transformer2DModel):
-            input_embed, time_embed, text_embed = module.pos_embed, module.time_text_embed, module.context_embedder
-            input_embed_rname, time_embed_rname, text_embed_rname = "pos_embed", "time_text_embed", "context_embedder"
-            norm_out, norm_out_rname = module.norm_out, "norm_out"
-            proj_out, proj_out_rname = module.proj_out, "proj_out"
-            transformer_blocks, transformer_blocks_rname = module.transformer_blocks, "transformer_blocks"
-            return DiTStruct(
-                module=module,
-                parent=parent,
-                fname=fname,
-                idx=idx,
-                rname=rname,
-                rkey=rkey,
-                input_embed=input_embed,
-                time_embed=time_embed,
-                text_embed=text_embed,
-                transformer_blocks=transformer_blocks,
-                norm_out=norm_out,
-                proj_out=proj_out,
-                input_embed_rname=input_embed_rname,
-                time_embed_rname=time_embed_rname,
-                text_embed_rname=text_embed_rname,
-                norm_out_rname=norm_out_rname,
-                proj_out_rname=proj_out_rname,
-                transformer_blocks_rname=transformer_blocks_rname,
-            )
-        elif isinstance(module, FluxTransformer2DModel):
+        if isinstance(module, FluxTransformer2DModel):
             return FluxStruct.construct(module, parent=parent, fname=fname, rname=rname, rkey=rkey, idx=idx, **kwargs)
-        raise NotImplementedError(f"Unsupported module type: {type(module)}")
+        else:
+            if isinstance(module, PixArtTransformer2DModel):
+                input_embed, input_embed_rname = module.pos_embed, "pos_embed"
+                time_embed, time_embed_rname = module.adaln_single, "adaln_single"
+                text_embed, text_embed_rname = module.caption_projection, "caption_projection"
+                norm_out, norm_out_rname = module.norm_out, "norm_out"
+                proj_out, proj_out_rname = module.proj_out, "proj_out"
+                transformer_blocks, transformer_blocks_rname = module.transformer_blocks, "transformer_blocks"
+                # ! in fact, `module.adaln_single.emb` is `time_embed`,
+                # ! `module.adaln_single.linear` is `transformer_norm`
+                # ! but since PixArt shares the `transformer_norm`, we categorize it as `time_embed`
+            elif isinstance(module, SanaTransformer2DModel):
+                input_embed, input_embed_rname = module.patch_embed, "patch_embed"
+                time_embed, time_embed_rname = module.time_embed, "time_embed"
+                text_embed, text_embed_rname = module.caption_projection, "caption_projection"
+                norm_out, norm_out_rname = module.norm_out, "norm_out"
+                proj_out, proj_out_rname = module.proj_out, "proj_out"
+                transformer_blocks, transformer_blocks_rname = module.transformer_blocks, "transformer_blocks"
+            elif isinstance(module, SD3Transformer2DModel):
+                input_embed, input_embed_rname = module.pos_embed, "pos_embed"
+                time_embed, time_embed_rname = module.time_text_embed, "time_text_embed"
+                text_embed, text_embed_rname = module.context_embedder, "context_embedder"
+                norm_out, norm_out_rname = module.norm_out, "norm_out"
+                proj_out, proj_out_rname = module.proj_out, "proj_out"
+                transformer_blocks, transformer_blocks_rname = module.transformer_blocks, "transformer_blocks"
+            else:
+                raise NotImplementedError(f"Unsupported module type: {type(module)}")
+            return DiTStruct(
+                module=module,
+                parent=parent,
+                fname=fname,
+                idx=idx,
+                rname=rname,
+                rkey=rkey,
+                input_embed=input_embed,
+                time_embed=time_embed,
+                text_embed=text_embed,
+                transformer_blocks=transformer_blocks,
+                norm_out=norm_out,
+                proj_out=proj_out,
+                input_embed_rname=input_embed_rname,
+                time_embed_rname=time_embed_rname,
+                text_embed_rname=text_embed_rname,
+                norm_out_rname=norm_out_rname,
+                proj_out_rname=proj_out_rname,
+                transformer_blocks_rname=transformer_blocks_rname,
+            )
 
     @classmethod
     def _get_default_key_map(cls) -> dict[str, set[str]]:
@@ -1818,7 +1859,7 @@ class FluxStruct(DiTStruct):
 
     @staticmethod
     def _default_construct(
-        module: tp.Union[FluxPipeline, FluxTransformer2DModel],
+        module: tp.Union[FluxPipeline, FluxControlPipeline, FluxTransformer2DModel],
         /,
         parent: tp.Optional[BaseModuleStruct] = None,
         fname: str = "",
@@ -1827,7 +1868,7 @@ class FluxStruct(DiTStruct):
         idx: int = 0,
         **kwargs,
     ) -> "FluxStruct":
-        if isinstance(module, FluxPipeline):
+        if isinstance(module, (FluxPipeline, FluxControlPipeline)):
             module = module.transformer
         if isinstance(module, FluxTransformer2DModel):
             input_embed, time_embed, text_embed = module.x_embedder, module.time_text_embed, module.context_embedder
@@ -1908,7 +1949,7 @@ class FluxStruct(DiTStruct):
 DiffusionAttentionStruct.register_factory(Attention, DiffusionAttentionStruct._default_construct)
 
 DiffusionFeedForwardStruct.register_factory(
-    (FeedForward, FluxSingleTransformerBlock), DiffusionFeedForwardStruct._default_construct
+    (FeedForward, FluxSingleTransformerBlock, GLUMBConv), DiffusionFeedForwardStruct._default_construct
 )
 
 DiffusionTransformerBlockStruct.register_factory(DIT_BLOCK_CLS, DiffusionTransformerBlockStruct._default_construct)
@@ -1917,7 +1958,9 @@ UNetBlockStruct.register_factory(UNET_BLOCK_CLS, UNetBlockStruct._default_constr
 
 UNetStruct.register_factory(tp.Union[UNET_PIPELINE_CLS, UNET_CLS], UNetStruct._default_construct)
 
-FluxStruct.register_factory(tp.Union[FluxPipeline, FluxTransformer2DModel], FluxStruct._default_construct)
+FluxStruct.register_factory(
+    tp.Union[FluxPipeline, FluxControlPipeline, FluxTransformer2DModel], FluxStruct._default_construct
+)
 
 DiTStruct.register_factory(tp.Union[DIT_PIPELINE_CLS, DIT_CLS], DiTStruct._default_construct)
 

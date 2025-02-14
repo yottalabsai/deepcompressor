@@ -3,25 +3,61 @@
 
 import torch
 
+from ..utils import MmaWeightPackerBase
+
 __all__ = ["convert_to_qserve_w4x8y16_linear_weight", "convert_to_qserve_w8x8y16_linear_weight"]
 
 
-def pack_w4(weight: torch.Tensor):
-    assert weight.dtype == torch.int8, f"quantized weight should be torch.int8, but got {weight.dtype}."
-    oc, ic = weight.shape
-    # pack to M_2, [M/32, K/32, (M_8, K_4), (K_2, M_2, K_4)]
-    _weight = weight.reshape(oc // 32, 2, 2, 8, ic // 32, 2, 4, 4)
-    _weight = _weight.permute(1, 0, 4, 3, 6, 5, 2, 7).contiguous()
-    _weight = (_weight[1] << 4) + _weight[0]
-    assert _weight.shape == (oc // 32, ic // 32, 8, 4, 2, 2, 4)
-    return _weight.view(oc // 32, ic // 32, 32, 16)
+class QServePacker(MmaWeightPackerBase):
+    def __init__(self):
+        super().__init__(bits=8, warp_n=32)
+        assert self.num_n_frags == 2
+
+    def pack_weight(self, weight: torch.Tensor) -> torch.Tensor:
+        assert weight.min() >= 0, "quantized weight should be non-negative."
+        assert weight.max() <= 15, "quantized weight should be less than 16."
+        assert weight.dtype == torch.uint8, f"quantized weight should be torch.uint8, but got {weight.dtype}."
+        n, k = weight.shape
+        assert n % self.warp_n == 0, "output channel size should be divisible by warp_n."
+        assert k % self.warp_k == 0, "input channel size should be divisible by warp_k."
+        n_warps, k_warps = n // self.warp_n, k // self.warp_k
+        weight = weight.reshape(
+            n_warps,
+            self.num_n_frags,  # always 2
+            self.n_pack_size,  # always 2
+            self.num_n_lanes,  # constant 8
+            # self.lane_n,  # constant 1
+            k_warps,
+            # self.num_k_frags,  # constant 1
+            self.k_pack_size,  # always 2
+            self.num_k_lanes,  # constant 4
+            self.lane_k,  # always 4 = 32 bits / 8 bits
+        )
+        weight = weight.permute(1, 0, 4, 3, 6, 5, 2, 7).contiguous()
+        assert weight.shape[3:-1] == (8, 4, 2, 2)
+        weight = (weight[1] << 4) + weight[0]
+        weight = weight.view(n_warps, k_warps, self.num_lanes, self.pack_size, self.lane_k).view(torch.int8)
+        return weight.view(n, k // 2)
+
+    def pack_scale(
+        self, scale: torch.Tensor, zero: torch.Tensor | None = None, subscale: torch.Tensor | None = None
+    ) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
+        scale = scale.view(-1)
+        n = scale.shape[0]
+        if subscale is None:
+            zero = zero.view(-1)
+        else:
+            assert subscale.dtype == torch.int8, f"subscale should be torch.int8, but got {subscale.dtype}."
+            view_shape = (n // self.warp_n, self.num_n_frags * self.n_pack_size, self.num_n_lanes, -1)
+            subscale = subscale.view(view_shape).permute(3, 0, 2, 1).contiguous().view(-1, n)
+            zero = zero.view(view_shape).permute(3, 0, 2, 1).contiguous().view(-1, n)
+        return scale, zero, subscale
 
 
 def convert_to_qserve_w4x8y16_linear_weight(
     weight: torch.Tensor,
     scale: torch.Tensor,
     zero: torch.Tensor,
-    group_size: int = -1,
     subscale: torch.Tensor | None = None,
     zero_pre_scaled: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor | None]:
@@ -34,8 +70,6 @@ def convert_to_qserve_w4x8y16_linear_weight(
             scale tensor for the weight tensor.
         zero (`torch.Tensor`):
             zero point tensor for the weight tensor.
-        group_size (`int`, *optional*, defaults to `-1`):
-            quantization group size.
         subscale (`torch.Tensor` or `None`, *optional*, defaults to `None`):
             subscale tensor for the weight tensor.
         zero_pre_scaled (`bool`, *optional*, defaults to `False`):
@@ -53,29 +87,26 @@ def convert_to_qserve_w4x8y16_linear_weight(
     scale = scale.to(dtype=torch.float32, device=weight.device)
     zero = zero.to(dtype=torch.float32, device=weight.device)
     oc, ic = weight.shape
-    group_size = ic if group_size <= 0 else group_size
-    assert group_size <= ic, "group size should be less than or equal to input channel size."
-    assert ic % group_size == 0, "input channel size should be divisible by group size."
-    if group_size < ic:  # per-group quantization
-        assert subscale is not None, "subscale tensor is required for per-group quantization."
+    if subscale is not None:  # per-group quantization
         subscale = subscale.to(dtype=weight.dtype, device=weight.device)
-        gc = ic // group_size
         # region reshape scale and zero point
         if scale.numel() == 1:
             scale = scale.view(-1).expand(oc)
         scale = scale.reshape(oc).contiguous().view(oc, 1)
+        assert subscale.numel() > 1, "subscale tensor is required for per-group quantization."
+        subscale = subscale.view(oc, -1, 1).round_()
+        ng = subscale.shape[1]
+        gs = ic // ng
+        assert ic == ng * gs, "input channel size should be divisible by group size."
         if zero.numel() == 1:
-            zero = zero.view(1, 1).expand(oc, gc)
-        zero = zero.reshape(oc, gc).contiguous().view(oc, gc, 1).round_()
-        if subscale.numel() == 1:
-            subscale = subscale.view(1, 1).expand(oc, gc)
-        subscale = subscale.reshape(oc, gc).contiguous().view(oc, gc, 1).round_()
+            zero = zero.view(1, 1).expand(oc, ng)
+        zero = zero.reshape(oc, ng).contiguous().view(oc, ng, 1).round_()
         # endregion
         # region quantize weight tensor
         weight = weight.div_(scale).round_()
         assert weight.min() >= -128, "first-level quantized weight should be greater than or equal to -128."
         assert weight.max() <= 127, "first-level quantized weight should be less than or equal to 127."
-        weight = weight.view(oc, gc, group_size)
+        weight = weight.view(oc, ng, gs)
         if not zero_pre_scaled:  # zero point is int8
             weight = weight.add_(zero)
         weight = weight.div_(subscale)
@@ -101,9 +132,9 @@ def convert_to_qserve_w4x8y16_linear_weight(
         assert weight.min() >= 0, "quantized weight should be non-negative."
         assert weight.max() <= 15, "quantized weight should be less than 16."
         # endregion
-        subscale = subscale.to(torch.int8).view(oc // 32, 4, 8, gc).permute(3, 0, 2, 1).contiguous().view(gc, oc)
         zero = -zero  # ! for group quant, qserve uses q*s+z=r instead of q*s-z=r
-        zero = zero.to(torch.int8).view(oc // 32, 4, 8, gc).permute(3, 0, 2, 1).contiguous().view(gc, oc)
+        subscale = subscale.to(torch.int8)
+        zero = zero.to(torch.int8)
     else:  # per-channel quantization
         assert subscale is None, "subscale tensor is not required for per-channel quantization."
         # region reshape scale and zero point
@@ -133,10 +164,11 @@ def convert_to_qserve_w4x8y16_linear_weight(
         assert weight.min() >= 0, "quantized weight should be non-negative."
         assert weight.max() <= 15, "quantized weight should be less than 16."
         # endregion
-        zero = zero.view(oc).to(dtype=dtype)
-    weight = pack_w4(weight.view(oc, ic).to(torch.int8))
-    weight = weight.view(oc, ic // 2)
-    scale = scale.view(oc).to(dtype=dtype)
+        zero = zero.to(dtype=dtype)
+    scale = scale.to(dtype=dtype)
+    packer = QServePacker()
+    weight = packer.pack_weight(weight.view(oc, ic).to(torch.uint8))
+    scale, zero, subscale = packer.pack_scale(scale=scale, zero=zero, subscale=subscale)
     return weight, scale, zero, subscale
 
 
