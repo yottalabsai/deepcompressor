@@ -3,23 +3,9 @@
 
 import torch
 
+from ..utils import ceil_divide
+
 __all__ = ["ceil_num_groups", "convert_to_tinychat_w4x16y16_linear_weight"]
-
-
-def ceil_divide(x: int, divisor: int) -> int:
-    """Ceiling division.
-
-    Args:
-        x (`int`):
-            dividend.
-        divisor (`int`):
-            divisor.
-
-    Returns:
-        `int`:
-            ceiling division result.
-    """
-    return (x + divisor - 1) // divisor
 
 
 def ceil_num_groups(in_features: int, group_size: int, weight_bits: int = 4) -> int:
@@ -71,7 +57,6 @@ def convert_to_tinychat_w4x16y16_linear_weight(
     weight: torch.Tensor,
     scale: torch.Tensor,
     zero: torch.Tensor,
-    group_size: int = -1,
     zero_pre_scaled: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Convert a weight tensor to TinyChat W4-X16-Y16 linear weight format.
@@ -83,8 +68,6 @@ def convert_to_tinychat_w4x16y16_linear_weight(
             scale tensor for the weight tensor.
         zero (`torch.Tensor`):
             zero point tensor for the weight tensor.
-        group_size (`int`, *optional*, defaults to `-1`):
-            quantization group size.
         zero_pre_scaled (`bool`, *optional*, defaults to `False`):
             whether zero point tensor is pre-scaled.
 
@@ -102,20 +85,21 @@ def convert_to_tinychat_w4x16y16_linear_weight(
     if zero_pre_scaled:
         zero = zero * scale
     oc, ic = weight.shape
-    group_size = ic if group_size <= 0 else group_size
-    assert group_size <= ic, "group size should be less than or equal to input channel size."
-    assert ic % group_size == 0, "input channel size should be divisible by group size."
-    ng = ic // group_size
     if scale.numel() == 1:
-        scale = scale.view(1, 1).expand(oc, ng)
+        scale = scale.view(1, 1).expand(oc, 1)
+        ng, gs = 1, ic
+    else:
+        ng = scale.numel() // oc
+        gs = ic // ng
     scale = scale.reshape(oc, ng).contiguous().view(oc, ng, 1)
+    assert ic == gs * ng, "input channel size should be equal to group size times number of groups."
     if zero.numel() == 1:
         zero = zero.view(1, 1).expand(oc, ng)
     zero = zero.reshape(oc, ng).contiguous().view(oc, ng, 1)
     weight = weight.view(oc, ng, -1).add_(zero).div_(scale).round_().view(oc, ic)
     assert weight.min() >= 0 and weight.max() <= 15, "quantized weight should be in [0, 15]."
     _weight = pack_w4(weight.to(torch.int32))
-    _ng = ceil_num_groups(ic, group_size, weight_bits=4)
+    _ng = ceil_num_groups(ic, gs, weight_bits=4)
     _scale = torch.zeros((_ng, oc), dtype=dtype, device=device)
     _zero = torch.zeros((_ng, oc), dtype=dtype, device=device)
     _scale[:ng] = scale.view(oc, ng).t().to(dtype=dtype)

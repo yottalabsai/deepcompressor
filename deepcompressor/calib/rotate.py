@@ -7,7 +7,7 @@ import torch
 import torch.nn as nn
 
 from ..utils.hooks import BaseInputPackager, IOHook
-from ..utils.math import get_hadamard_matrices, hardmard_transform, random_hadamard_matrix
+from ..utils.math import HadamardMatrix, hardmard_transform, random_hadamard_matrix
 
 __all__ = [
     "rotate_in_channels",
@@ -40,11 +40,14 @@ class RMSNorm(nn.Module):
 
 
 class HadamardTransformHook(IOHook):
-    def __init__(self, hadamard_1: torch.Tensor, hadamard_K: torch.Tensor, K: int, packager: BaseInputPackager = None):
+    def __init__(
+        self, rhs: torch.Tensor, lhs: torch.Tensor, lhs_k: int, scaled: bool = True, packager: BaseInputPackager = None
+    ):
         super().__init__(pre=True, post=False, input_packager=packager, output_packager=None)
-        self.hadamard_1 = hadamard_1
-        self.hadamard_K = hadamard_K
-        self.K = K
+        self.rhs = rhs
+        self.lhs = lhs
+        self.lhs_k = lhs_k
+        self.scaled = scaled
 
     def pre_forward(
         self,
@@ -54,64 +57,79 @@ class HadamardTransformHook(IOHook):
     ) -> tuple[tuple[torch.Tensor, ...], dict[str, tp.Any]]:
         tensors = self.input_packager.unpack(module, input_args, input_kwargs)
         for k, x in tensors.items():
-            tensors[k] = hardmard_transform(x, self.hadamard_1, self.hadamard_K, self.K, scaled=True)
+            tensors[k] = hardmard_transform(
+                x, hadamard_rhs=self.rhs, hadamard_lhs=self.lhs, lhs_k=self.lhs_k, scaled=self.scaled
+            )
         return self.input_packager.repack(tensors, module, input_args, input_kwargs)
 
 
 def rotate_in_channels(weight: nn.Parameter, /, *, rotation: torch.Tensor) -> None:
     """Rotate the input channels of a weight matrix."""
-    dtype = weight.dtype
-    weight.data = torch.matmul(weight.data.to(dtype=torch.float64), rotation.to(weight.device)).to(dtype=dtype)
+    shape, dtype = weight.shape, weight.dtype
+    weight.data = (
+        torch.matmul(weight.data.view(-1, rotation.shape[0]).to(dtype=torch.float64), rotation.to(weight.device))
+        .to(dtype=dtype)
+        .view(shape)
+    )
 
 
 def rotate_out_channels(weight: nn.Parameter, /, *, rotation: torch.Tensor, bias: nn.Parameter | None = None) -> None:
     """Rotate the output channels of a weight matrix."""
-    dtype = weight.dtype
-    weight.data = torch.matmul(rotation.T.to(weight.device), weight.data.to(dtype=torch.float64)).to(dtype=dtype)
+    shape, dtype = weight.shape, weight.dtype
+    out_channels, head_channels = shape[0], rotation.shape[0]
+    num_heads = out_channels // head_channels
+    weight.data = (
+        torch.matmul(
+            rotation.T.to(weight.device), weight.data.view(num_heads, head_channels, -1).to(dtype=torch.float64)
+        )
+        .to(dtype=dtype)
+        .view(shape)
+    )
     if bias is not None:
-        bias.data = torch.matmul(rotation.T.to(weight.device), bias.data.to(dtype=torch.float64)).to(dtype=dtype)
+        bias.data = (
+            torch.matmul(
+                rotation.T.to(weight.device), bias.data.view(num_heads, head_channels, -1).to(dtype=torch.float64)
+            )
+            .to(dtype=dtype)
+            .view(-1)
+        )
 
 
-def hadamard_in_channels(modules: tp.Iterable[nn.Module], packager: BaseInputPackager = None):
+def hadamard_in_channels(
+    modules: tp.Iterable[nn.Module],
+    packager: BaseInputPackager = None,
+    dtype: torch.dtype | None = None,
+    device: torch.device | str | None = None,
+):
     """Apply Hadamard quantization to the input channels of the modules."""
-    in_channels = None
     for module in modules:
         if isinstance(module, nn.Linear):
-            device, dtype = module.weight.device, module.weight.dtype
-            if in_channels is None:
-                in_channels = module.in_features
-                hadamard_1, hadamard_K, K = get_hadamard_matrices(in_channels)
-                hadamard_1_double = hadamard_1.to(dtype=torch.float64).mul_(
-                    1.0 / torch.tensor(in_channels, dtype=torch.float64).sqrt()
-                )
-                hadamard_K_double = hadamard_K.to(dtype=torch.float64).clone()
-                hadamard_1 = hadamard_1_double.to(dtype=hadamard_K.dtype).clone()
-            else:
-                assert in_channels == module.in_features
-            hadamard_1_double = hadamard_1_double.to(device=device)
-            hadamard_K_double = hadamard_K_double.to(device=device)
+            in_channels = module.in_features
+            device, dtype = device or module.weight.device, dtype or module.weight.dtype
+            rhs_double, lhs_double, k = HadamardMatrix.get(in_channels, scale=True, dtype=torch.float64)
             module.weight.data = hardmard_transform(
-                module.weight.data.to(torch.float64), hadamard_1_double, hadamard_K_double, K, scaled=True
-            ).to(device=device, dtype=dtype)
-            hadamard_1 = hadamard_1.to(device=device, dtype=dtype)
-            hadamard_K = hadamard_K.to(device=device, dtype=dtype)
-            HadamardTransformHook(hadamard_1, hadamard_K, K, packager=packager).register(module)
+                module.weight.data.to(torch.float64), rhs_double.to(device), lhs_double.to(device), k, scaled=True
+            ).to(device=device, dtype=module.weight.dtype)
+            del rhs_double, lhs_double, k
+            rhs, lhs, k = HadamardMatrix.get(in_channels, scale=True, dtype=dtype, device=device)
+            HadamardTransformHook(rhs=rhs, lhs=lhs, lhs_k=k, packager=packager).register(module)
         else:
             raise NotImplementedError(f"Module {module} not supported!")
 
 
-def get_rotation_matrix(num_channels: int, random: bool = True) -> torch.Tensor:
+def get_rotation_matrix(num_channels: int, random: bool = True, compatible: bool = True) -> torch.Tensor:
     """Get a random rotation matrix for the given number of channels."""
     if random:
         return random_hadamard_matrix(num_channels)
     else:
-        hadamard_1, hadamard_K, K = get_hadamard_matrices(num_channels)
-        hadamard_1 = hadamard_1.to(dtype=torch.float64)
-        hadamard_K = hadamard_K.to(dtype=torch.float64)
-        if K == 1:
-            rotation = hadamard_1
+        rhs, lhs, k = HadamardMatrix.get(num_channels, scale=False)
+        rhs = rhs.to(dtype=torch.float64)
+        if k == 1:
+            rotation = rhs
+        elif compatible:  # this is compatible with hadamard_transform
+            rotation = torch.kron(lhs.T.contiguous().to(dtype=torch.float64), rhs)
         else:
-            rotation = torch.kron(hadamard_1, hadamard_K)
+            rotation = torch.kron(rhs, lhs.to(dtype=torch.float64))
         return rotation.mul_(1.0 / torch.tensor(num_channels, dtype=torch.float64).sqrt())
 
 

@@ -130,7 +130,7 @@ class QuantLowRankCalibrator(SearchBasedCalibrator[QuantLowRankCalibConfig, LowR
         )
         self.wgt_idx = 0
         if len(self.hat_ws) > 1:
-            lw = branch.get_effective_weight()
+            lw = branch.get_effective_weight().view(self.w.shape)
             rw = self.w - lw
             oc_idx = 0
             for idx, oc in enumerate(self.ocs):
@@ -145,7 +145,7 @@ class QuantLowRankCalibrator(SearchBasedCalibrator[QuantLowRankCalibConfig, LowR
                     self.hat_ws[idx].add_(lw[oc_idx : oc_idx + oc])
                     oc_idx += oc
         else:
-            lw = branch.get_effective_weight()
+            lw = branch.get_effective_weight().view(self.w.shape)
             self.qw = self.w_quantizer.quantize(self.w - lw, kernel=None, develop_dtype=self.develop_dtype).data
             if self.objective != SearchBasedCalibObjective.OutputsError:
                 self.hat_ws = [self.qw + lw]

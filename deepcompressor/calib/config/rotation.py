@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Quantization Rotation configuration."""
 
+import os
 import typing as tp
 from dataclasses import dataclass, field
 
@@ -16,21 +17,30 @@ class QuantRotationConfig:
     """Configuration for rotation quantization.
 
     Args:
+        name (`str`):
+            The name of the rotation quantization configuration. If `path` is provided, this is required.
+            Otherwise, it is set to "random" if `random` is `True`, and "hadamard" otherwise.
+        path (`str`, *optional*, default=`""`):
+            The path to the rotation matrix. If provided, `name` must be set.
         random (`bool`, *optional*, default=`False`):
             Whether to use random hadamard sample as rotation matrix.
         transforms (`list[str]`, *optional*, default=`[]`):
             The module keys using explicit hadamard transform.
     """
 
+    name: str = ""
+    path: str = ""
     random: bool = False
     transforms: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.transforms = sorted(set(self.transforms or []))
-
-    @property
-    def with_hadamard_transform(self) -> bool:
-        return len(self.transforms) > 0
+        if self.path and os.path.exists(self.path):
+            assert self.name, "The name of the rotation quantization configuration must be provided."
+            self.random = False
+        else:
+            self.path = ""
+            self.name = "random" if self.random else "hadamard"
 
     def generate_dirnames(self, *, prefix: str = "", **kwargs) -> list[str]:
         """Get the directory names of the rotation quantization configuration.
@@ -38,8 +48,8 @@ class QuantRotationConfig:
         Returns:
             list[str]: The directory names of the rotation quantization configuration.
         """
-        name = "random" if self.random else "hadamard"
-        if self.with_hadamard_transform:
+        name = self.name
+        if self.transforms:
             name += f".[{'+'.join(self.transforms)}]"
         return [f"{prefix}.{name}" if prefix else name]
 

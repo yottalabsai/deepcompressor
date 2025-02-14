@@ -8,6 +8,7 @@ import torch
 from omniconfig import configclass
 
 from deepcompressor.calib.config import (
+    QuantRotationConfig,
     SearchBasedCalibGranularity,
     SearchBasedCalibObjective,
     SearchBasedCalibStrategy,
@@ -45,11 +46,14 @@ class DiffusionQuantConfig(DiffusionModuleQuantizerConfig):
     """
 
     calib: DiffusionCalibCacheLoaderConfig
+    rotation: QuantRotationConfig | None = None
     smooth: SmoothTransfomerConfig | None = None
     develop_dtype: torch.dtype = field(default_factory=lambda s=torch.float32: eval_dtype(s, with_quant_dtype=False))
 
     def __post_init__(self) -> None:  # noqa: C901
         super().__post_init__()
+        if self.rotation is not None and not self.rotation.transforms:
+            self.rotation = None
         if self.smooth is not None:
             if not self.smooth.enabled_proj and not self.smooth.enabled_attn:
                 self.smooth = None
@@ -72,6 +76,11 @@ class DiffusionQuantConfig(DiffusionModuleQuantizerConfig):
                 assert self.opts.smallest_group_shape[0] == -1, "static quantization requires batch group size to be -1"
         self.organize()
         self.unsigned_ipts = self.ipts.for_unsigned()
+
+    @property
+    def enabled_rotation(self) -> bool:
+        """Whether to enable rotation."""
+        return self.rotation is not None and bool(self.rotation.transforms)
 
     @property
     def enabled_smooth(self) -> bool:
@@ -99,6 +108,10 @@ class DiffusionQuantConfig(DiffusionModuleQuantizerConfig):
 
     def generate_calib_dirname(self) -> str:
         name = ""
+        if self.enabled_rotation:
+            name += "-rotate"
+            if self.rotation.random:
+                name += ".rnd"
         if self.enabled_smooth:
             name += "-smooth"
             if self.enabled_smooth_proj:
@@ -119,6 +132,8 @@ class DiffusionQuantConfig(DiffusionModuleQuantizerConfig):
             quant_names.append("shift")
         if self.enabled_wgts and self.wgts.enabled_low_rank:
             quant_names.extend(QuantLowRankConfig.generate_dirnames(self.wgts.low_rank, prefix="lowrank"))
+        if self.enabled_rotation:
+            quant_names.extend(self.rotation.generate_dirnames(prefix="rotate"))
         smooth_dirpath = ""
         if self.enabled_smooth:
             quant_names.extend(self.smooth.generate_dirnames(prefix="smooth"))
@@ -131,6 +146,8 @@ class DiffusionQuantConfig(DiffusionModuleQuantizerConfig):
         if self.enabled_wgts and self.wgts.needs_calib_data:
             quant_names.extend(self.wgts.calib_range.generate_dirnames(prefix="w.range"))
             wgts_dirpath = os.path.join("wgts", *quant_names)
+        if self.enabled_wgts and self.wgts.enabled_gptq:
+            quant_names.extend(self.wgts.kernel_gptq.generate_dirnames(prefix="w.kernel"))
         acts_dirpath = ""
         if self.needs_acts_quantizer_cache:
             if self.enabled_ipts and self.ipts.needs_calib_data:
@@ -220,6 +237,12 @@ class DiffusionQuantConfig(DiffusionModuleQuantizerConfig):
                     lowrank_skips = lowrank_skips - skips_map["w"]
                     lowrank_skips.add("[w]")
                 lowrank_name += ".skip.[{}]".format("+".join(sorted(lowrank_skips)))
+        rotation_name = ""
+        if self.enabled_rotation:
+            rotation_name = "-rot"
+            if self.rotation.random:
+                rotation_name += ".rnd"
+            rotation_name += ".[{}]".format("+".join(sorted(simplify_skips(self.rotation.transforms))))
         smooth_name = ""
         if self.enabled_smooth:
             smooth_name = "-smth"
@@ -286,6 +309,15 @@ class DiffusionQuantConfig(DiffusionModuleQuantizerConfig):
                     smooth_name += ".[{}]".format(
                         "+".join(f"x.{xspan.name}.y.{yspan.name}" for xspan, yspan in self.smooth.attn.spans)
                     )
+        gptq_name = ""
+        if self.enabled_wgts and self.wgts.kernel_gptq is not None:
+            gptq_name = "-gptq"
+            if self.wgts.kernel_gptq.skips:
+                gptq_skips = simplify_skips(self.wgts.kernel_gptq.skips)
+                if "w" in skips_map and gptq_skips.issuperset(skips_map["w"]):
+                    gptq_skips = gptq_skips - skips_map["w"]
+                    gptq_skips.add("[w]")
+                gptq_name += ".skip.[{}]".format("+".join(sorted(gptq_skips)))
         wrange_name = ""
         if (
             self.enabled_wgts
@@ -361,7 +393,9 @@ class DiffusionQuantConfig(DiffusionModuleQuantizerConfig):
                     yrange_skips = yrange_skips - skips_map["y"]
                     yrange_skips.add("[y]")
                 yrange_name += ".skip.[{}]".format("+".join(sorted(yrange_skips)))
-        name = skip_name + lowrank_name + smooth_name + wrange_name + xrange_name + yrange_name
+        name = (
+            skip_name + lowrank_name + rotation_name + smooth_name + gptq_name + wrange_name + xrange_name + yrange_name
+        )
         name = name[1:] if name else "default"
         name += f"-{self.calib.generate_dirnames()[0]}"
         return name
@@ -389,6 +423,11 @@ class DiffusionQuantConfig(DiffusionModuleQuantizerConfig):
                 wgts_skips.extend(list(key_map[skip]))
             wgts_skip_set = set(wgts_skips)
             self.wgts.skips = sorted(wgts_skip_set)
+            if self.wgts.kernel_gptq is not None:
+                wgts_kernel_gptq_skips = []
+                for skip in self.wgts.kernel_gptq.skips:
+                    wgts_kernel_gptq_skips.extend(list(key_map[skip]))
+                self.wgts.kernel_gptq.skips = sorted(set(wgts_kernel_gptq_skips) - wgts_skip_set)
             if self.wgts.low_rank is not None:
                 wgts_low_rank_skips = []
                 for skip in self.wgts.low_rank.skips:
@@ -426,3 +465,8 @@ class DiffusionQuantConfig(DiffusionModuleQuantizerConfig):
             for skip in self.smooth.proj.skips:
                 smooth_proj_skips.extend(list(key_map[skip]))
             self.smooth.proj.skips = sorted(set(smooth_proj_skips) - (wgts_skip_set & ipts_skip_set))
+        if self.rotation is not None:
+            rotation_transforms = []
+            for transform in self.rotation.transforms:
+                rotation_transforms.extend(list(key_map[transform]))
+            self.rotation.transforms = sorted(set(rotation_transforms))

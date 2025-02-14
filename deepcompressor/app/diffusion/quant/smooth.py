@@ -58,9 +58,9 @@ def smooth_diffusion_qkv_proj(
     if needs_quant and config.smooth.enabled_proj and config.smooth.proj.is_enabled_for(module_key):
         logger.debug("- %s.qkv_proj", attn.name)
         prevs = None
-        if attn.parent.norm_type.startswith("layer_norm"):
+        if config.smooth.proj.fuse_when_possible and attn.parent.norm_type.startswith("layer_norm"):
             if not hasattr(attn.parent.module, "pos_embed") or attn.parent.module.pos_embed is None:
-                prevs = attn.parent.attn_norms[attn.idx]
+                prevs = attn.parent.pre_attn_norms[attn.idx]
                 assert isinstance(prevs, nn.LayerNorm)
         cache_key = attn.q_proj_name
         smooth_cache[cache_key] = smooth_linear_modules(
@@ -99,9 +99,9 @@ def smooth_diffusion_qkv_proj(
     if needs_quant and config.smooth.enabled_proj and config.smooth.proj.is_enabled_for(module_key):
         logger.debug("- %s add_qkv_proj", attn.name)
         prevs = None
-        add_attn_norm = attn.parent.add_attn_norms[attn.idx]
-        if isinstance(add_attn_norm, nn.LayerNorm):
-            prevs = add_attn_norm
+        pre_attn_add_norm = attn.parent.pre_attn_add_norms[attn.idx]
+        if isinstance(pre_attn_add_norm, nn.LayerNorm) and config.smooth.proj.fuse_when_possible:
+            prevs = pre_attn_add_norm
         cache_key = attn.add_k_proj_name
         smooth_cache[cache_key] = smooth_linear_modules(
             prevs,
@@ -146,16 +146,12 @@ def smooth_diffusion_out_proj(
     if config.enabled_wgts and config.wgts.enabled_low_rank:
         exclusive = config.wgts.low_rank.exclusive
         config.wgts.low_rank.exclusive = True
+    fuse_smooth = not attn.config.linear_attn and config.smooth.proj.fuse_when_possible
+    prevs = [attn.v_proj, attn.add_v_proj] if fuse_smooth else None
     if len(module_keys) == 1 and module_keys[0] == attn.out_proj_key:
         logger.debug("- %s.out_proj", attn.name)
         module_key = attn.out_proj_key
         cache_key = attn.o_proj_name
-        if attn.is_joint_attn():
-            prevs = [attn.v_proj, attn.add_v_proj]
-        elif attn.is_cross_attn():
-            prevs = [attn.add_v_proj]
-        else:
-            prevs = [attn.v_proj]
         smooth_cache[cache_key] = smooth_linear_modules(
             prevs,
             attn.o_proj,
@@ -174,7 +170,6 @@ def smooth_diffusion_out_proj(
         logger.debug("- %s.add_out_proj", attn.name)
         module_key = attn.add_out_proj_key
         cache_key = attn.add_o_proj_name
-        prevs = [attn.v_proj, attn.add_v_proj]
         smooth_cache[cache_key] = smooth_linear_modules(
             prevs,
             attn.add_o_proj,
@@ -193,7 +188,6 @@ def smooth_diffusion_out_proj(
         logger.debug("- %s.out_proj + %s.add_out_proj", attn.name, attn.name)
         module_key = attn.out_proj_key
         cache_key = attn.o_proj_name
-        prevs = [attn.v_proj, attn.add_v_proj]
         smooth_cache[cache_key] = smooth_linear_modules(
             prevs,
             [attn.o_proj, attn.add_o_proj],
@@ -209,8 +203,14 @@ def smooth_diffusion_out_proj(
         )
     if config.enabled_wgts and config.wgts.enabled_low_rank:
         config.wgts.low_rank.exclusive = exclusive
-    for prev in prevs:
-        prev.out_smooth_cache_key = cache_key
+    if fuse_smooth:
+        for prev in prevs:
+            if prev is not None:
+                prev.out_smooth_cache_key = cache_key
+    else:
+        for o_proj in [attn.o_proj, attn.add_o_proj]:
+            if o_proj is not None:
+                ActivationSmoother(smooth_cache[cache_key], channels_dim=-1).as_hook().register(o_proj)
     attn.o_proj.in_smooth_cache_key = cache_key
     if attn.add_o_proj is not None:
         attn.add_o_proj.in_smooth_cache_key = cache_key
@@ -219,7 +219,7 @@ def smooth_diffusion_out_proj(
 
 @torch.inference_mode()
 def smooth_diffusion_up_proj(
-    ffn_norm: nn.Module,
+    pre_ffn_norm: nn.Module,
     ffn: DiffusionFeedForwardStruct,
     config: DiffusionQuantConfig,
     smooth_cache: dict[str, torch.Tensor],
@@ -234,23 +234,25 @@ def smooth_diffusion_up_proj(
     if needs_quant and config.smooth.enabled_proj and config.smooth.proj.is_enabled_for(module_key):
         logger.debug("- %s.up_proj", ffn.name)
         prevs = None
-        if isinstance(ffn_norm, nn.LayerNorm) and ffn.parent.norm_type in ["ada_norm", "layer_norm"]:
-            prevs = ffn_norm
+        if config.smooth.proj.fuse_when_possible and isinstance(pre_ffn_norm, nn.LayerNorm):
+            if ffn.parent.norm_type in ["ada_norm", "layer_norm"]:
+                prevs = pre_ffn_norm
         cache_key = ffn.up_proj_name
+        channels_dim = -1 if isinstance(ffn.down_proj, nn.Linear) else 1
         smooth_cache[cache_key] = smooth_linear_modules(
             prevs,
             ffn.up_projs,
             scale=smooth_cache.get(cache_key, None),
             config=config.smooth.proj,
             weight_quantizer=Quantizer(config.wgts, key=module_key, low_rank=config.wgts.low_rank),
-            input_quantizer=Quantizer(config.ipts, channels_dim=-1, key=module_key),
+            input_quantizer=Quantizer(config.ipts, channels_dim=channels_dim, key=module_key),
             inputs=block_cache[ffn.up_proj_name].inputs if block_cache else None,
             eval_inputs=block_cache[ffn.up_proj_name].inputs if block_cache else None,
             eval_module=ffn.up_proj,
             develop_dtype=config.develop_dtype,
         )
         if prevs is None:
-            ActivationSmoother(smooth_cache[cache_key], channels_dim=-1).as_hook().register(ffn.up_proj)
+            ActivationSmoother(smooth_cache[cache_key], channels_dim=channels_dim).as_hook().register(ffn.up_proj)
         for proj in ffn.up_projs:
             proj.in_smooth_cache_key = cache_key
     return smooth_cache
@@ -270,29 +272,24 @@ def smooth_diffusion_down_proj(
     needs_quant = needs_quant or (config.enabled_ipts and config.ipts.is_enabled_for(module_key))
     if needs_quant and config.smooth.enabled_proj and config.smooth.proj.is_enabled_for(module_key):
         logger.debug("- %s.down_proj", ffn.name)
-        prev = None
-        if ffn.config.intermediate_act_type.endswith("_glu"):
-            prev = ffn.up_proj
         cache_key = ffn.down_proj_name
         unsigned_ipts = getattr(ffn.down_proj, "unsigned", False)
         config_ipts = config.unsigned_ipts if unsigned_ipts else config.ipts
+        channels_dim = -1 if isinstance(ffn.down_proj, nn.Linear) else 1
         smooth_cache[cache_key] = smooth_linear_modules(
-            prev,
+            None,
             ffn.down_proj,
             scale=smooth_cache.get(cache_key, None),
             config=config.smooth.proj,
             weight_quantizer=Quantizer(config.wgts, key=module_key, low_rank=config.wgts.low_rank),
-            input_quantizer=Quantizer(config_ipts, channels_dim=-1, key=module_key),
+            input_quantizer=Quantizer(config_ipts, channels_dim=channels_dim, key=module_key),
             inputs=block_cache[ffn.down_proj_name].inputs if block_cache else None,
             eval_inputs=block_cache[ffn.down_proj_name].inputs if block_cache else None,
             eval_module=ffn.down_proj,
             develop_dtype=config.develop_dtype,
         )
         ffn.down_proj.in_smooth_cache_key = cache_key
-        if prev is None:
-            ActivationSmoother(smooth_cache[cache_key], channels_dim=-1).as_hook().register(ffn.down_proj)
-        else:
-            prev.out_smooth_cache_key = cache_key
+        ActivationSmoother(smooth_cache[cache_key], channels_dim=channels_dim).as_hook().register(ffn.down_proj)
     return smooth_cache
 
 
@@ -338,7 +335,7 @@ def smooth_diffusion_parallel_qkv_up_proj(
     if attn.is_self_attn():
         if block.add_ffn_struct is not None:
             smooth_cache = smooth_diffusion_up_proj(
-                ffn_norm=block.add_ffn_norm,
+                pre_ffn_norm=block.pre_add_ffn_norm,
                 ffn=block.add_ffn_struct,
                 config=config,
                 smooth_cache=smooth_cache,
@@ -398,7 +395,7 @@ def smooth_diffusion_sequential_transformer_block(
         )
     if block.ffn_struct is not None:
         smooth_cache = smooth_diffusion_up_proj(
-            ffn_norm=block.ffn_norm,
+            pre_ffn_norm=block.pre_ffn_norm,
             ffn=block.ffn_struct,
             config=config,
             smooth_cache=smooth_cache,
@@ -409,7 +406,7 @@ def smooth_diffusion_sequential_transformer_block(
         )
     if block.add_ffn_struct is not None:
         smooth_cache = smooth_diffusion_up_proj(
-            ffn_norm=block.add_ffn_norm,
+            pre_ffn_norm=block.pre_add_ffn_norm,
             ffn=block.add_ffn_struct,
             config=config,
             smooth_cache=smooth_cache,
@@ -461,7 +458,7 @@ def smooth_diffusion_parallel_transformer_block(
 
 
 @torch.inference_mode()
-def smooth_diffusion_linear(
+def smooth_diffusion_module(
     module_key: str,
     module_name: str,
     module: nn.Linear | nn.Conv2d,
@@ -474,6 +471,8 @@ def smooth_diffusion_linear(
     needs_quant = config.enabled_wgts and config.wgts.is_enabled_for(module_key)
     needs_quant = needs_quant or (config.enabled_ipts and config.ipts.is_enabled_for(module_key))
     if needs_quant and config.smooth.enabled_proj and config.smooth.proj.is_enabled_for(module_key):
+        logger.debug("- Smoothing Module %s", module_name)
+        tools.logging.Formatter.indent_inc()
         logger.debug("- %s", module_name)
         cache_key = module_name
         channels_dim = -1 if isinstance(module, nn.Linear) else 1
@@ -491,6 +490,9 @@ def smooth_diffusion_linear(
         )
         ActivationSmoother(smooth_cache[cache_key], channels_dim=channels_dim).as_hook().register(module)
         module.in_smooth_cache_key = cache_key
+        tools.logging.Formatter.indent_dec()
+    else:
+        logger.debug("- Skipping Module %s", module_name)
     return smooth_cache
 
 
@@ -549,9 +551,7 @@ def smooth_diffusion_layer(
                     )
                 tools.logging.Formatter.indent_dec()
         elif isinstance(module, (nn.Linear, nn.Conv2d)):
-            logger.debug("- Smoothing Module %s", module_name)
-            tools.logging.Formatter.indent_inc()
-            smooth_cache = smooth_diffusion_linear(
+            smooth_cache = smooth_diffusion_module(
                 module_key=module_key,
                 module_name=module_name,
                 module=module,
@@ -559,7 +559,6 @@ def smooth_diffusion_layer(
                 smooth_cache=smooth_cache,
                 layer_cache=layer_cache,
             )
-            tools.logging.Formatter.indent_dec()
         else:
             needs_quant = config.enabled_wgts and config.wgts.is_enabled_for(module_key)
             needs_quant = needs_quant or (config.enabled_ipts and config.ipts.is_enabled_for(module_key))
@@ -593,6 +592,12 @@ def smooth_diffusion(
         model = DiffusionModelStruct.construct(model)
     assert isinstance(model, DiffusionModelStruct)
     smooth_cache = smooth_cache or {}
+    if config.smooth.enabled_proj:
+        if smooth_cache:
+            assert smooth_cache.get("proj.fuse_when_possible", True) == config.smooth.proj.fuse_when_possible
+    if config.smooth.enabled_attn:
+        if smooth_cache:
+            assert smooth_cache.get("attn.fuse_when_possible", True) == config.smooth.attn.fuse_when_possible
     if not smooth_cache:
         with tools.logging.redirect_tqdm():
             for _, (layer, layer_cache, layer_kwargs) in tqdm(
@@ -617,4 +622,8 @@ def smooth_diffusion(
     else:
         for layer in model.block_structs:
             smooth_diffusion_layer(layer=layer, config=config, smooth_cache=smooth_cache)
+    if config.smooth.enabled_proj:
+        smooth_cache.setdefault("proj.fuse_when_possible", config.smooth.proj.fuse_when_possible)
+    if config.smooth.enabled_attn:
+        smooth_cache.setdefault("attn.fuse_when_possible", config.smooth.attn.fuse_when_possible)
     return smooth_cache

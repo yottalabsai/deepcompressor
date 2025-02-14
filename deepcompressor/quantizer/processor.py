@@ -265,7 +265,7 @@ class Quantizer(QuantizerImpl, BaseTensorProcessor):
                 else:
                     for t in tensors:
                         lb = LowRankBranch(t.shape[1], t.shape[0], rank=self.low_rank.rank, weight=t.data)
-                        qt = self.quantize(t.data - lb.get_effective_weight(), **qkwargs)
+                        qt = self.quantize(t.data - lb.get_effective_weight().view(t.data.shape), **qkwargs)
                         qtensors.append(qt)
                         branches.append(lb)
                 return qtensors, branches

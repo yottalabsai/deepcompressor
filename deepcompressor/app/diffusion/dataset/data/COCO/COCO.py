@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """COCO"""
+
 import json
 import os
 import random
@@ -48,7 +49,9 @@ _CITATION = """
 
 _DESCRIPTION = """
 MS COCO is a large-scale object detection, segmentation, and captioning dataset.
-COCO has several features: Object segmentation, Recognition in context, Superpixel stuff segmentation, 330K images (>200K labeled), 1.5 million object instances, 80 object categories, 91 stuff categories, 5 captions per image, 250,000 people with keypoints.
+ COCO has several features: Object segmentation, Recognition in context, Superpixel stuff segmentation,
+ 330K images (>200K labeled), 1.5 million object instances, 80 object categories, 91 stuff categories,
+ 5 captions per image, 250,000 people with keypoints.
 """
 
 _HOMEPAGE = "https://cocodataset.org/#home"
@@ -183,18 +186,21 @@ class COCO(datasets.GeneratorBasedBuilder):
             prompt_id = hash_string_to_int(filename) % len(sentences_raw)
             prompt = sentences_raw[prompt_id]
 
-            yield i, {
-                "filename": filename,
-                "image": Image.open(image_path) if self.config.return_gt else None,
-                "image_path": image_path,
-                "image_root": image_root,
-                "prompt": prompt,
-                "prompt_id": prompt_id,
-                "imgid": meta["imgid"],
-                "split": self.config.name,
-                "coco_id": meta["cocoid"],
-                "sentences_raw": sentences_raw,
-                "sentids": meta["sentids"],
-                "sentences_sentid": [caption["sentid"] for caption in meta["sentences"]],
-                "sentences_tokens": [caption["tokens"] for caption in meta["sentences"]],
-            }
+            yield (
+                i,
+                {
+                    "filename": filename,
+                    "image": Image.open(image_path) if self.config.return_gt else None,
+                    "image_path": image_path,
+                    "image_root": image_root,
+                    "prompt": prompt,
+                    "prompt_id": prompt_id,
+                    "imgid": meta["imgid"],
+                    "split": self.config.name,
+                    "coco_id": meta["cocoid"],
+                    "sentences_raw": sentences_raw,
+                    "sentids": meta["sentids"],
+                    "sentences_sentid": [caption["sentid"] for caption in meta["sentences"]],
+                    "sentences_tokens": [caption["tokens"] for caption in meta["sentences"]],
+                },
+            )

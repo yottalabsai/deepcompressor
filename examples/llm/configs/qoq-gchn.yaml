@@ -46,6 +46,9 @@ quant:
     skips:
     - attn_q
   enable_rotation: true
+  rotation:
+    transforms:
+    - out_proj
   enable_smooth: true
   smooth:
     enable_proj: true
@@ -63,6 +66,7 @@ quant:
       skips:
       - qkv_proj
       - up_proj
+      - out_proj
     enable_attn: true
     attn:
       strategy: GridSearch

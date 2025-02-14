@@ -62,7 +62,7 @@ class LlmQuantConfig(LlmModuleQuantizerConfig):
                 self.smooth = None
         if self.rotation is not None and self.reorder is not None:
             self.reorder.skips.append("residual")
-            if self.rotation.with_hadamard_transform:
+            if self.rotation.transforms:
                 self.reorder.skips.extend(self.rotation.transforms)
                 self.reorder.skips = sorted(set(self.reorder.skips))
         if self.enabled_ipts:
@@ -170,9 +170,11 @@ class LlmQuantConfig(LlmModuleQuantizerConfig):
         rotation_name = ""
         if self.enabled_rotation:
             rotation_name = "-rot"
-            if self.rotation.random:
+            if self.rotation.path:
+                rotation_name += f".{self.rotation.name}"
+            elif self.rotation.random:
                 rotation_name += ".rnd"
-            if self.rotation.with_hadamard_transform:
+            if self.rotation.transforms:
                 rotation_name += ".[+{}]".format("+".join(w_names[w] for w in self.rotation.transforms))
         reorder_name = ""
         if self.enabled_reorder:
@@ -363,9 +365,12 @@ class LlmQuantConfig(LlmModuleQuantizerConfig):
             acts=acts_dirpath,
         ).add_parent_dirs(*self.calib.generate_dirnames())
         if self.enabled_rotation:
-            cache_dirpath.rotation = os.path.join(
-                "rotation",
-                f"seed.{seed}" if self.rotation.random else "hadamard",
-            )
+            if self.rotation.path:
+                cache_dirpath.rotation = ""
+            else:
+                cache_dirpath.rotation = os.path.join(
+                    "rotation",
+                    f"seed.{seed}" if self.rotation.random else "hadamard",
+                )
         cache_dirpath.add_parent_dirs(root, "llm", "cache", "quant")
         return cache_dirpath

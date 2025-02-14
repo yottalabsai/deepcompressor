@@ -17,7 +17,9 @@
 </p>
 
 ## News
-- [2025/01] 🎉 [**SVDQuant**](https://arxiv.org/abs/2411.05007) has been accepted to ICLR 2025!
+- [2025/02] 🎉 [**QServe**](https://arxiv.org/abs/2405.04532) has been accepted to MLSys 2025!
+- [2025/01] 🎉 [**SVDQuant**](https://arxiv.org/abs/2411.05007) has been accepted to ICLR 2025 (Spotlight)!
+- [2024/12] 🎉 [**QServe**](https://github.com/mit-han-lab/qserve) has been integratedd into NVIDIA [TensorRT-LLM](https://github.com/NVIDIA/TensorRT-LLM/tree/main/examples/llama)!
 - [2024/11] 🔥 Our latest **W4A4** diffusion model quantization work [**SVDQuant**](https://arxiv.org/abs/2411.05007) algorithm and [**Nunchaku**](https://github.com/mit-han-lab/nunchaku) system is publicly released! Check our [paper](http://arxiv.org/abs/2411.05007)!
 - [2024/05] 🔥 Our latest **W4A8KV4** LLM quantization work **QoQ** algorithm and **QServe** system is publicly released! **QoQ** is short for *quattuor-octō-quattuor* which is 4-8-4 in latin. Check our [paper](https://arxiv.org/abs/2405.04532)!
 
@@ -72,24 +74,30 @@ Diffusion models have been proven highly effective at generating high-quality im
 
 Below is the quality and similarity evaluated with 5000 samples from MJHQ-30K dataset. IR means ImageReward. Our 4-bit results outperform other 4-bit baselines, effectively preserving the visual quality of 16-bit models.
 
-| Model                      | Precision | Method  | FID ($\downarrow$) | IR ($\uparrow$) | LPIPS ($\downarrow$) | PSNR( $\uparrow$) |
-|----------------------------|-----------|---------|--------------------|-----------------|----------------------|-------------------|
-| FLUX.1-dev (50 Steps)      | BF16      | --      | 20.3               | 0.953           | --                   | --                |
-|                            | INT W8A8  | Ours    | 20.4               | 0.948           | 0.089                | 27.0              |
-|                            | W4A16     | NF4     | 20.6               | 0.910           | 0.272                | 19.5              |
-|                            | INT W4A4  | Ours    | **19.86**          | 0.932           | 0.254                | 20.1              |
-|                            | FP W4A4   | Ours    | 21.0               | **0.933**       | **0.247**            | **20.2**          |
-| FLUX.1-schnell (4 Steps)   | BF16      | --      | 19.2               | 0.938           | --                   | --                |
-|                            | INT W8A8  | Ours    | 19.2               | 0.966           | 0.120                | 22.9              |
-|                            | W4A16     | NF4     | 18.9               | 0.943           | 0.257                | 18.2              |
-|                            | INT W4A4  | Ours    | **18.4**           | **0.969**       | 0.292                | 17.5              |
-|                            | FP W4A4   | Ours    | 19.9               | 0.956           | 0.279                | 17.5              |
-|                            | FP16      | --      | 16.6               | 0.944           | --                   | --                |
-| PixArt-Sigma (20 Steps)    | INT W8A8  | ViDiT-Q | 15.7               | 0.944           | 0.137                | 22.5              |
-|                            | INT W8A8  | Ours    | 16.3               | **0.955**       | **0.109**            | **23.7**          |
-|                            | INT W4A8  | ViDiT-Q | 37.3               | 0.573           | 0.611                | 12.0              |
-|                            | INT W4A4  | Ours    | 20.1               | 0.898           | 0.394                | 16.2              |
-|                            | FP W4A4   | Ours    | **18.3**           | **0.946**       | **0.326**            | **17.4**          |
+| Model                      | Precision |  Method   | FID ($\downarrow$) | IR ($\uparrow$) | LPIPS ($\downarrow$) | PSNR( $\uparrow$) |
+|----------------------------|-----------|-----------|--------------------|-----------------|----------------------|-------------------|
+| FLUX.1-dev (50 Steps)      | BF16      | --        | 20.3               | 0.953           | --                   | --                |
+|                            | W4A16     | NF4       | 20.6               | 0.910           | 0.272                | 19.5              |
+|                            | INT W4A4  |           | 20.2               | 0.908           | 0.322                | 18.5              |
+|                            | INT W4A4  | Ours      | 19.9               | 0.935           | 0.223                | 21.0              |
+|                            | NVFP4     |           | 20.3               | 0.961           | 0.345                | 16.3              |
+|                            | NVFP4     | Ours      | 20.3               | 0.942           | 0.205                | 21.5              |
+| FLUX.1-schnell (4 Steps)   | BF16      | --        | 19.2               | 0.938           | --                   | --                |
+|                            | W4A16     | NF4       | 18.9               | 0.943           | 0.257                | 18.2              |
+|                            | INT W4A4  |           | 18.1               | 0.962           | 0.345                | 16.3              |
+|                            | INT W4A4  | Ours      | 18.3               | 0.951           | 0.257                | 18.3              |
+|                            | NVFP4     |           | 19.0               | 0.952           | 0.276                | 17.6              |
+|                            | NVFP4     | Ours      | 18.9               | 0.964           | 0.229                | 19.0              |
+| SANA-1.6b (20 Steps)       | BF16      | --        | 20.6               | 0.952           | --                   | --                |
+|                            | INT W4A4  |           | 20.5               | 0.894           | 0.339                | 15.3              |
+|                            | INT W4A4  | Ours      | 19.3               | 0.935           | 0.220                | 17.8              |
+|                            | NVFP4     |           | 19.7               | 0.929           | 0.236                | 17.4              |
+|                            | NVFP4     | Ours      | 20.2               | 0.941           | 0.176                | 19.0              |
+| PixArt-Sigma (20 Steps)    | FP16      | --        | 16.6               | 0.944           | --                   | --                |
+|                            | INT W4A8  | ViDiT-Q   | 37.3               | 0.573           | 0.611                | 12.0              |
+|                            | INT W4A4  | Ours      | 19.2               | 0.878           | 0.323                | 17.6              |
+|                            | NVFP4     |           | 31.8               | 0.660           | 0.517                | 14.8              |
+|                            | NVFP4     | Ours      | 16.6               | 0.940           | 0.271                | 18.5              |
 
 ### QServe: W4A8KV4 Quantization for Efficient LLM Serving
 
@@ -111,10 +119,11 @@ Below is the WikiText2 perplexity evaluated with 2048 sequence length. The lower
 | SmoothQuant | W8A8         | 3.23          | 6.38         | 3.14        |  6.28       | 5.54       | 4.95        | 3.36        | 5.73     | 5.13      | 4.23      | 5.29       | 4.69   |
 | GPTQ-R      | W4A16 g128   | 3.46          | 6.64         | 3.42        |  6.56       | 5.63       | 4.99        | 3.43        | 5.83     | 5.20      | 4.22      | 5.39       | 4.68   |
 | AWQ         | W4A16 g128   | 3.22          | 6.60         | 3.20        |  6.54       | 5.60       | 4.97        | 3.41        | 5.78     | 5.19      | 4.21      | 5.37       | 4.67   |
-| QuaRot      | W4A4         | 5.97          | 8.32         | 6.75        |  8.33       | 6.19       | 5.45        | 3.83        | 6.34     | 5.58      | 4.64      | 5.77       | NaN    |
+| QuaRot      | W4A4         | 5.97          | 8.32         | 6.75        |  8.33       | 6.19       | 5.45        | 3.83        | 6.34     | 5.58      | 4.64      | 5.77       | -      |
+| SpinQuant   | W4A4         | 4.80          | 7.42         | 6.27        |  7.37       | 5.96       | 5.24        | 3.71        | 6.14     | 5.39      | 4.56      | -          | -      |
 | Atom        | W4A4 g128    | -             | -            | 4.33        |  7.78       | 6.12       | 5.31        | 3.73        | 6.25     | 5.52      | 4.61      | 5.76       | 4.97   |
-| QoQ         | W4A8KV4      | 3.69          | 6.91         | 3.65        |  6.84       | 5.75       | 5.11        | 3.51        | 5.92     | 5.27      | 4.32      | 5.45       | 4.73   |
-| QoQ         | W4A8KV4 g128 | 3.54          | 6.80         | 3.51        |  6.73       | 5.68       | 5.05        | 3.46        | 5.88     | 5.23      | 4.27      | 5.41       | 4.73   |
+| QoQ         | W4A8KV4      | 3.68          | 6.87         | 3.65        |  6.81       | 5.75       | 5.11        | 3.50        | 5.92     | 5.27      | 4.31      | 5.44       | 4.73   |
+| QoQ         | W4A8KV4 g128 | 3.51          | 6.77         | 3.50        |  6.70       | 5.67       | 5.06        | 3.46        | 5.88     | 5.23      | 4.27      | 5.41       | 4.73   |
 
 \* SmoothQuant is evaluated with per-tensor static KV cache quantization.
 

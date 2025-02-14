@@ -8,7 +8,7 @@ import torch.nn as nn
 from tqdm import tqdm
 from transformers import PreTrainedTokenizer
 
-from deepcompressor.calib.smooth import smooth_attention, smooth_linear_modules
+from deepcompressor.calib.smooth import ActivationSmoother, smooth_attention, smooth_linear_modules
 from deepcompressor.data.cache import IOTensorsCache
 from deepcompressor.quantizer.processor import Quantizer
 from deepcompressor.utils import tools
@@ -49,7 +49,9 @@ def smooth_llm_layer(  # noqa: C901
     layer_kwargs = layer_kwargs or {}
     attn, ffn = layer.attn_struct, layer.ffn_struct
     # region attention qk
-    if config.smooth.enabled_attn:
+    needs_quant = config.enabled_opts
+    needs_quant = needs_quant and (config.opts.is_enabled_for(attn.q_key) or config.opts.is_enabled_for(attn.k_key))
+    if config.smooth.enabled_attn and needs_quant:
         logger.debug("- %s.%s", attn.name, attn.k_rkey)
         cache_key = f"{attn.name}.{attn.k_rkey}"
         smooth_cache[cache_key] = smooth_attention(
@@ -73,15 +75,13 @@ def smooth_llm_layer(  # noqa: C901
         )
     # endregion
     # region qkv projection
-    if (
-        config.smooth.enabled_proj
-        and attn.config.do_norm_before
-        and config.smooth.proj.is_enabled_for(attn.qkv_proj_key)
-    ):
+    needs_quant = config.enabled_ipts and config.ipts.is_enabled_for(attn.qkv_proj_key)
+    needs_quant = needs_quant or (config.enabled_wgts and config.wgts.is_enabled_for(attn.qkv_proj_key))
+    if config.smooth.enabled_proj and config.smooth.proj.is_enabled_for(attn.qkv_proj_key) and needs_quant:
         logger.debug("- %s.%s", attn.name, attn.qkv_proj_rkey)
         cache_key = attn.v_proj_name
         smooth_cache[cache_key] = smooth_linear_modules(
-            attn.parent.attn_norms[attn.idx],
+            attn.parent.pre_attn_norm,
             attn.qkv_proj,
             scale=smooth_cache.get(cache_key, None),
             config=config.smooth.proj,
@@ -93,13 +93,17 @@ def smooth_llm_layer(  # noqa: C901
             eval_kwargs=attn.filter_kwargs(layer_kwargs),
             develop_dtype=config.develop_dtype,
         )
+        if not attn.parent.pre_attn_norm:
+            ActivationSmoother(smooth_cache[cache_key], channels_dim=-1).as_hook().register(attn.qkv_proj)
     # endregion
     # region output projection
-    if config.smooth.enabled_proj and config.smooth.proj.is_enabled_for(attn.out_proj_key):
+    needs_quant = config.enabled_ipts and config.ipts.is_enabled_for(attn.out_proj_key)
+    needs_quant = needs_quant or (config.enabled_wgts and config.wgts.is_enabled_for(attn.out_proj_key))
+    if config.smooth.enabled_proj and config.smooth.proj.is_enabled_for(attn.out_proj_key) and needs_quant:
         logger.debug("- %s.%s", attn.name, attn.out_proj_rkey)
         cache_key = attn.o_proj_name
         smooth_cache[cache_key] = smooth_linear_modules(
-            attn.v_proj,
+            None if attn.config.linear_attn else attn.v_proj,
             attn.o_proj,
             scale=smooth_cache.get(cache_key, None),
             config=config.smooth.proj,
@@ -112,14 +116,18 @@ def smooth_llm_layer(  # noqa: C901
             num_head_repeats=attn.config.num_head_repeats,
             develop_dtype=config.develop_dtype,
         )
+        if attn.config.linear_attn:
+            ActivationSmoother(smooth_cache[cache_key], channels_dim=-1).as_hook().register(attn.o_proj)
     # endregion
     num_experts = ffn.config.num_experts
     # region up projection
-    if config.smooth.enabled_proj and ffn.config.do_norm_before and config.smooth.proj.is_enabled_for(ffn.up_proj_key):
+    needs_quant = config.enabled_ipts and config.ipts.is_enabled_for(ffn.up_proj_key)
+    needs_quant = needs_quant or (config.enabled_wgts and config.wgts.is_enabled_for(ffn.up_proj_key))
+    if config.smooth.enabled_proj and config.smooth.proj.is_enabled_for(ffn.up_proj_key) and needs_quant:
         logger.debug("- %s.%s", ffn.name, ffn.up_proj_rkey)
         cache_key = ffn.name
         smooth_cache[cache_key] = smooth_linear_modules(
-            ffn.parent.ffn_norm,
+            ffn.parent.pre_ffn_norm,
             ffn.up_projs,
             scale=smooth_cache.get(cache_key, None),
             config=config.smooth.proj,
@@ -131,9 +139,15 @@ def smooth_llm_layer(  # noqa: C901
             extra_modules=[ffn.moe_gate] if num_experts > 1 else None,
             develop_dtype=config.develop_dtype,
         )
+        if not ffn.parent.pre_ffn_norm:
+            hook = ActivationSmoother(smooth_cache[cache_key], channels_dim=-1).as_hook().register(ffn.up_projs)
+            if num_experts > 1:
+                hook.register(ffn.moe_gate)
     # endregion
     # region down projection
-    if config.smooth.enabled_proj and config.smooth.proj.is_enabled_for(ffn.down_proj_key):
+    needs_quant = config.enabled_ipts and config.ipts.is_enabled_for(ffn.down_proj_key)
+    needs_quant = needs_quant or (config.enabled_wgts and config.wgts.is_enabled_for(ffn.down_proj_key))
+    if config.smooth.enabled_proj and config.smooth.proj.is_enabled_for(ffn.down_proj_key) and needs_quant:
         for expert_idx in range(num_experts):
             logger.debug("- %s.%s", ffn.expert_names[expert_idx], ffn.down_proj_rkey)
             cache_key = ffn.down_proj_names[expert_idx]

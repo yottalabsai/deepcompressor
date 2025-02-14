@@ -1,11 +1,12 @@
 import logging
 import os
 
+from deepcompressor.app.diffusion.dataset.data import get_dataset
+
 from .fid import compute_fid
 from .image_reward import compute_image_reward
 from .multimodal import compute_image_multimodal_metrics
 from .similarity import compute_image_similarity_metrics
-from ..benchmarks import get_dataset
 
 logging.getLogger("PIL").setLevel(logging.WARNING)
 
@@ -26,7 +27,7 @@ def compute_image_metrics(
 ) -> dict:
     if chunk_start == 0 and chunk_step == 1:
         chunk_only = False
-    assert chunk_start == 0 and chunk_step == 1, "Chunking is not supported for image benchmarks."
+    assert chunk_start == 0 and chunk_step == 1, "Chunking is not supported for image data."
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
     if isinstance(benchmarks, str):
         benchmarks = (benchmarks,)

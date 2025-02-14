@@ -12,7 +12,7 @@ if __name__ == "__main__":
     assert len(unused_cfgs) == 0, f"Unused configurations: {unused_cfgs}"
     assert unused_args is None, f"Unused arguments: {unused_args}"
     assert isinstance(config, DiffusionPtqRunConfig)
-    results = config.eval.evaluate(pipeline=None, skip_gen=True)
+    results = config.eval.evaluate(pipeline=None, skip_gen=True, task=config.pipeline.task)
     save_path = os.path.join(config.eval.gen_root, f"results-{config.output.timestamp}.json")
     os.makedirs(os.path.abspath(os.path.dirname(save_path)), exist_ok=True)
     with open(save_path, "w") as f:

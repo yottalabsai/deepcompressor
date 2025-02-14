@@ -1,8 +1,30 @@
-import os.path
+import os
+import random
 
 import datasets
+import yaml
 
 __all__ = ["get_dataset"]
+
+
+def load_dataset_yaml(meta_path: str, max_dataset_size: int = -1, repeat: int = 4) -> dict:
+    meta = yaml.safe_load(open(meta_path, "r"))
+    names = list(meta.keys())
+    if max_dataset_size > 0:
+        random.Random(0).shuffle(names)
+        names = names[:max_dataset_size]
+        names = sorted(names)
+
+    ret = {"filename": [], "prompt": [], "meta_path": []}
+    idx = 0
+    for name in names:
+        prompt = meta[name]
+        for j in range(repeat):
+            ret["filename"].append(f"{name}-{j}")
+            ret["prompt"].append(prompt)
+            ret["meta_path"].append(meta_path)
+            idx += 1
+    return ret
 
 
 def get_dataset(
@@ -23,9 +45,17 @@ def get_dataset(
         "token": True,
         "max_dataset_size": max_dataset_size,
     }
-    if name.endswith(".yaml") or name.endswith(".yml"):
-        path = os.path.join(prefix, "YAML")
-        dataset = datasets.load_dataset(path, url=name, repeat=repeat, download_mode="force_redownload", **kwargs)
+    if name.endswith((".yaml", ".yml")):
+        dataset = datasets.Dataset.from_dict(
+            load_dataset_yaml(name, max_dataset_size=max_dataset_size, repeat=repeat),
+            features=datasets.Features(
+                {
+                    "filename": datasets.Value("string"),
+                    "prompt": datasets.Value("string"),
+                    "meta_path": datasets.Value("string"),
+                }
+            ),
+        )
     else:
         path = os.path.join(prefix, f"{name}")
         if name == "COCO":

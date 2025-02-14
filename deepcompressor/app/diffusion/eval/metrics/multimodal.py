@@ -10,6 +10,8 @@ from torch.utils import data
 from torchmetrics.multimodal import CLIPImageQualityAssessment, CLIPScore
 from tqdm import tqdm
 
+__all__ = ["compute_image_multimodal_metrics"]
+
 
 class PromptImageDataset(data.Dataset):
     def __init__(self, ref_dataset: datasets.Dataset, gen_dirpath: str):
@@ -53,7 +55,7 @@ def compute_image_multimodal_metrics(
         dataset, batch_size=batch_size, num_workers=num_workers, shuffle=False, drop_last=False
     )
     with torch.no_grad():
-        for i, batch in enumerate(tqdm(dataloader, desc=f"{ref_dataset.config_name} multimodal metrics")):
+        for batch in tqdm(dataloader, desc=f"{ref_dataset.config_name} multimodal metrics"):
             batch[0] = batch[0].to(device)
             for metric_name, metric in metrics.items():
                 if metric_name == "clip_iqa":

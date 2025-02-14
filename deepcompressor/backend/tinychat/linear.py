@@ -164,7 +164,6 @@ class W4Linear(nn.Module):
             weight=weight,
             scale=scale,
             zero=zero,
-            group_size=group_size,
             zero_pre_scaled=zero_pre_scaled,
         )
         _linear.qweight.data.copy_(weight)

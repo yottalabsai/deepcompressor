@@ -1,3 +1,5 @@
+.tmp
+.tmp/
 baselines
 baselines/
 benchmarks

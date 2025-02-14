@@ -2,18 +2,19 @@
 """Collect calibration dataset."""
 
 import os
-import random
 from dataclasses import dataclass
 
+import datasets
 import torch
-import torch.nn as nn
-import yaml
 from omniconfig import configclass
-from tqdm import trange
+from torch import nn
+from tqdm import tqdm
 
 from deepcompressor.app.diffusion.config import DiffusionPtqRunConfig
 from deepcompressor.utils.common import hash_str_to_int, tree_map
 
+from ...utils import get_control
+from ..data import get_dataset
 from .utils import CollectHook
 
 
@@ -22,7 +23,7 @@ def process(x: torch.Tensor) -> torch.Tensor:
     return torch.from_numpy(x.float().numpy()).to(dtype)
 
 
-def collect(config: DiffusionPtqRunConfig, filenames: list[str], dataset: dict[str, str]):
+def collect(config: DiffusionPtqRunConfig, dataset: datasets.Dataset):
     samples_dirpath = os.path.join(config.output.root, "samples")
     caches_dirpath = os.path.join(config.output.root, "caches")
     os.makedirs(samples_dirpath, exist_ok=True)
@@ -35,25 +36,48 @@ def collect(config: DiffusionPtqRunConfig, filenames: list[str], dataset: dict[s
     model.register_forward_hook(CollectHook(caches=caches), with_kwargs=True)
 
     batch_size = config.eval.batch_size
-    print(f"In total {len(filenames)} samples")
+    print(f"In total {len(dataset)} samples")
     print(f"Evaluating with batch size {batch_size}")
     pipeline.set_progress_bar_config(desc="Sampling", leave=False, dynamic_ncols=True, position=1)
-    num_batches = (len(filenames) + batch_size - 1) // batch_size
-    for i in trange(num_batches, desc="Images", leave=False, dynamic_ncols=True, position=0):
-        batch = filenames[i * batch_size : (i + 1) * batch_size]
-        prompts = [dataset[name] for name in batch]
-        seeds = [hash_str_to_int(name) for name in batch]
+    for batch in tqdm(
+        dataset.iter(batch_size=batch_size, drop_last_batch=False),
+        desc="Data",
+        leave=False,
+        dynamic_ncols=True,
+        total=(len(dataset) + batch_size - 1) // batch_size,
+    ):
+        filenames = batch["filename"]
+        prompts = batch["prompt"]
+        seeds = [hash_str_to_int(name) for name in filenames]
         generators = [torch.Generator(device=pipeline.device).manual_seed(seed) for seed in seeds]
-        images = pipeline(prompts, generator=generators, **config.eval.get_pipeline_kwargs()).images
-        if len(caches) == batch_size * config.eval.num_steps:
-            num_guidances = 1
-        elif len(caches) == 2 * batch_size * config.eval.num_steps:
-            num_guidances = 2
-        else:
-            raise ValueError(f"Unexpected number of caches: {len(caches)} != {batch_size} * {config.eval.num_steps}")
-        for j, (filename, image) in enumerate(zip(batch, images, strict=True)):
+        pipeline_kwargs = config.eval.get_pipeline_kwargs()
+
+        task = config.pipeline.task
+        control_root = config.eval.control_root
+        if task in ["canny-to-image", "depth-to-image", "inpainting"]:
+            controls = get_control(
+                task,
+                batch["image"],
+                names=batch["filename"],
+                data_root=os.path.join(
+                    control_root, collect_config.dataset_name, f"{dataset.config_name}-{config.eval.num_samples}"
+                ),
+            )
+            if task == "inpainting":
+                pipeline_kwargs["image"] = controls[0]
+                pipeline_kwargs["mask_image"] = controls[1]
+            else:
+                pipeline_kwargs["control_image"] = controls
+
+        result_images = pipeline(prompts, generator=generators, **pipeline_kwargs).images
+        num_guidances = (len(caches) // batch_size) // config.eval.num_steps
+        num_steps = len(caches) // (batch_size * num_guidances)
+        assert (
+            len(caches) == batch_size * num_steps * num_guidances
+        ), f"Unexpected number of caches: {len(caches)} != {batch_size} * {config.eval.num_steps} * {num_guidances}"
+        for j, (filename, image) in enumerate(zip(filenames, result_images, strict=True)):
             image.save(os.path.join(samples_dirpath, f"{filename}.png"))
-            for s in range(config.eval.num_steps):
+            for s in range(num_steps):
                 for g in range(num_guidances):
                     c = caches[s * batch_size * num_guidances + g * batch_size + j]
                     c["filename"] = filename
@@ -82,7 +106,7 @@ class CollectConfig:
 
     root: str = "datasets"
     dataset_name: str = "qdiff"
-    prompt_path: str = "prompts/qdiff.yaml"
+    data_path: str = "prompts/qdiff.yaml"
     num_samples: int = 128
 
 
@@ -109,13 +133,13 @@ if __name__ == "__main__":
     )
     print(f"Saving caches to {collect_dirpath}")
 
-    dataset = yaml.safe_load(open(collect_config.prompt_path, "r"))
-    filenames = list(dataset.keys())
-    if collect_config.num_samples > 0:
-        random.Random(0).shuffle(filenames)
-        filenames = filenames[: collect_config.num_samples]
-        filenames = sorted(filenames)
+    dataset = get_dataset(
+        collect_config.data_path,
+        max_dataset_size=collect_config.num_samples,
+        return_gt=ptq_config.pipeline.task in ["canny-to-image"],
+        repeat=1,
+    )
 
     ptq_config.output.root = collect_dirpath
     os.makedirs(ptq_config.output.root, exist_ok=True)
-    collect(ptq_config, filenames=filenames, dataset=dataset)
+    collect(ptq_config, dataset=dataset)

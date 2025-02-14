@@ -56,7 +56,7 @@ class LlmQuantizer(Quantizer):
     """
 
     config: LlmQuantizerConfig
-    kernel: QuantGptqConfig | None = field(init=False, default=None)
+    kernel: QuantGptqConfig | None = field(init=False)
     tensor_type: TensorType = TensorType.Weights
 
     def __post_init__(self) -> None:

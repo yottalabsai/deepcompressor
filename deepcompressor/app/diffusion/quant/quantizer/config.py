@@ -9,6 +9,7 @@ from omniconfig import configclass
 from deepcompressor.calib.config import SkipBasedDynamicRangeCalibConfig, SkipBasedQuantLowRankCalibConfig
 from deepcompressor.data.dtype import QuantDataType
 from deepcompressor.quantizer.config import QuantizerConfig
+from deepcompressor.quantizer.kernel import QuantGptqConfig
 from deepcompressor.utils.config import EnableConfig, SkipBasedConfig
 
 __all__ = [
@@ -17,6 +18,26 @@ __all__ = [
     "DiffusionActivationQuantizerConfig",
     "DiffusionModuleQuantizerConfig",
 ]
+
+
+@configclass
+@dataclass
+class DiffusionGPTQConfig(SkipBasedConfig, QuantGptqConfig):
+    """Configuration for GPTQ quantization.
+
+    Args:
+        damp_percentage (`float`, *optional*, defaults to `0.01`):
+            The percentage of damping.
+        block_size (`int`, *optional*, defaults to `128`):
+            The block size of the GPTQ quantization.
+        num_inv_tries (`int`, *optional*, defaults to `200`):
+            The number of tries for the inverse.
+        hessian_block_size (`int`, *optional*, defaults to `-1`):
+            The block size when calculing the Hessian.
+        skips: list[str] = field(default_factory=list)
+    """
+
+    pass
 
 
 @configclass
@@ -37,6 +58,8 @@ class DiffusionQuantizerConfig(SkipBasedConfig, QuantizerConfig):
             The keys of the modules to skip.
         static (`bool`, *optional*, defaults to `False`):
             Whether to use static quantization.
+        kernel_gptq (`DiffusionGPTQConfig` or `None`, *optional*, defaults to `None`):
+            The gptq quantization configuration.
         low_rank (`SkipBasedQuantLowRankCalibConfig` or `None`, *optional*, defaults to `None`):
             The quantization low-rank branch calibration configuration.
         calib_range (`DynamicRangeCalibConfig` or `None`, *optional*, defaults to `None`):
@@ -44,6 +67,7 @@ class DiffusionQuantizerConfig(SkipBasedConfig, QuantizerConfig):
     """
 
     static: bool = False
+    kernel_gptq: DiffusionGPTQConfig | None = None
     low_rank: SkipBasedQuantLowRankCalibConfig | None = None
     calib_range: SkipBasedDynamicRangeCalibConfig | None = None
 
@@ -51,13 +75,21 @@ class DiffusionQuantizerConfig(SkipBasedConfig, QuantizerConfig):
         super().__post_init__()
         if self.quant_dtype is None:
             self.static = False
+            self.kernel_gptq = None
             self.low_rank = None
             self.calib_range = None
             self.skips.clear()
+        if self.kernel_gptq is not None and not self.kernel_gptq.is_enabled():
+            self.kernel_gptq = None
         if self.static and self.calib_range is None:
             self.calib_range = SkipBasedDynamicRangeCalibConfig()
         if self.low_rank is not None and not self.low_rank.is_enabled():
             self.low_rank = None
+
+    @property
+    def enabled_gptq(self) -> bool:
+        """Whether quantization kernel calibration is enabled."""
+        return self.kernel_gptq is not None and self.kernel_gptq.is_enabled()
 
     @property
     def enabled_low_rank(self) -> bool:
@@ -78,6 +110,8 @@ class DiffusionQuantizerConfig(SkipBasedConfig, QuantizerConfig):
         name = ""
         if self.static:
             name += ".static"
+        if self.enabled_gptq:
+            name += ".gptq"
         if self.enabled_low_rank:
             name += ".lowrank"
         if self.enabled_calib_range and (self.calib_range.needs_search or self.calib_range.ratio != 1):
@@ -138,6 +172,7 @@ class DiffusionActivationQuantizerConfig(DiffusionQuantizerConfig):
             Whether to allow unsigned data type for activation quantization.
     """
 
+    kernel_gptq: None = field(init=False, default=None)
     low_rank: None = field(init=False, default=None)
     allow_unsigned: bool = False
 

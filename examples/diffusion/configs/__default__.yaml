@@ -10,9 +10,7 @@ pipeline:
   device: cuda
   shift_activations: false
 eval:
-  num_samples: 1024
-  num_frames: null
-  fps: null
+  num_samples: 5000
   height: null
   width: null
   guidance_scale: null
@@ -29,6 +27,7 @@ eval:
   benchmarks:
     - "MJHQ"
     - "DCI"
+  control_root: "benchmarks"
 quant:
   calib:
     data: qdiff
@@ -39,10 +38,10 @@ quant:
     dtype: null
     zero_point: null
     group_shapes:
-    - - 1
-      - -1
+      - - 1
+        - -1
     scale_dtypes:
-    - null
+      - null
     skips: []
     enable_calib_range: true
     calib_range:
@@ -75,10 +74,10 @@ quant:
     dtype: null
     zero_point: null
     group_shapes:
-    - - 1
-      - -1
+      - - 1
+        - -1
     scale_dtypes:
-    - null
+      - null
     allow_unsigned: false
     skips: []
     enable_calib_range: false
@@ -111,8 +110,8 @@ quant:
       pre_reshape: true
       outputs_device: cpu
       spans:
-      - - AbsMax
-        - AbsMax
+        - - AbsMax
+          - AbsMax
       alpha: 0.5
       beta: -1
       num_grids: 20

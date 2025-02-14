@@ -15,7 +15,12 @@ from deepcompressor.data.common import TensorType
 from deepcompressor.data.range import DynamicRange
 from deepcompressor.quantizer.processor import Quantizer
 
-from .config import DiffusionActivationQuantizerConfig, DiffusionQuantizerConfig, DiffusionWeightQuantizerConfig
+from .config import (
+    DiffusionActivationQuantizerConfig,
+    DiffusionGPTQConfig,
+    DiffusionQuantizerConfig,
+    DiffusionWeightQuantizerConfig,
+)
 
 __all__ = ["DiffusionQuantizer", "DiffusionWeightQuantizer", "DiffusionActivationQuantizer"]
 
@@ -48,8 +53,12 @@ class DiffusionQuantizer(Quantizer):
         develop_dtype (`torch.dtype`, *optional*, defaults to `torch.float32`):
             The quantization development dtype.
 
-        low_rank (`QuantLowRankConfig` or `None`, *optional*, defaults to `None`):
+        kernel (`DiffusionGPTQConfig` or `None`, *optional*, defaults to `MISSING`):
+            The GPTQ kernel configuration.
+            If not provided (i.e., `MISSING`), the GPTQ configuration from the `config` will be used.
+        low_rank (`QuantLowRankConfig` or `None`, *optional*, defaults to `MISSING`):
             The quantization low-rank branch configuration.
+            If not provided (i.e., `MISSING`), the low-rank branch configuration from the `config` will be used.
         input_packager (`BaseInputPackager` or `None`, *optional*, defaults to `None`):
             The input packager, used for unpacking and repacking the input tensor(s).
         output_packager (`BaseOutputPackager` or `None`, *optional*, defaults to `None`):
@@ -57,8 +66,13 @@ class DiffusionQuantizer(Quantizer):
     """
 
     config: DiffusionQuantizerConfig
-    kernel: None = field(init=False, default=None)
+    kernel: DiffusionGPTQConfig | None = field(init=False)
+    low_rank: SkipBasedQuantLowRankCalibConfig | None = field(init=False)
     tensor_type: TensorType = TensorType.Weights
+
+    def __post_init__(self) -> None:
+        self.kernel = self.config.kernel_gptq
+        self.low_rank = self.config.low_rank
 
     def calibrate_dynamic_range(
         self,
@@ -152,6 +166,12 @@ class DiffusionWeightQuantizer(DiffusionQuantizer):
         develop_dtype (`torch.dtype`, *optional*, defaults to `torch.float32`):
             The quantization development dtype.
 
+        kernel (`DiffusionGPTQConfig` or `None`, *optional*, defaults to `MISSING`):
+            The GPTQ kernel configuration.
+            If not provided (i.e., `MISSING`), the GPTQ configuration from the `config` will be used.
+        low_rank (`QuantLowRankConfig` or `None`, *optional*, defaults to `MISSING`):
+            The quantization low-rank branch configuration.
+            If not provided (i.e., `MISSING`), the low-rank branch configuration from the `config` will be used.
         input_packager (`BaseInputPackager` or `None`, *optional*, defaults to `None`):
             The input packager, used for unpacking and repacking the input tensor(s).
         output_packager (`BaseOutputPackager` or `None`, *optional*, defaults to `None`):
@@ -161,10 +181,6 @@ class DiffusionWeightQuantizer(DiffusionQuantizer):
     config: DiffusionWeightQuantizerConfig
     channels_dim: None = field(init=False, default=None)
     tensor_type: TensorType = field(init=False, default=TensorType.Weights)
-    low_rank: SkipBasedQuantLowRankCalibConfig | None = field(init=False, default=None)
-
-    def __post_init__(self) -> None:
-        self.low_rank = self.config.low_rank
 
     def calibrate_dynamic_range(
         self,
@@ -284,8 +300,8 @@ class DiffusionActivationQuantizer(DiffusionQuantizer):
 
     config: DiffusionActivationQuantizerConfig
     tensor_type: TensorType = TensorType.Inputs
-    low_rank: None = field(init=False, default=None)
 
     def __post_init__(self) -> None:
+        super().__post_init__()
         assert self.tensor_type != TensorType.Weights, "The tensor type cannot be weights."
         assert isinstance(self.channels_dim, int), "The channels dimension must be provided."

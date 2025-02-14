@@ -39,7 +39,6 @@ python -m deepcompressor.backend.qserve.convert \
     --model-path /PATH/TO/HUGGINGCE-MODEL \
     --quant-path /PATH/TO/QUANTIZED-MODEL \
     --weight-bits 4 \
-    --group-size GROUP_SIZE \
     --output-root /ROOT/PATH/TO/OUTPUT-MODEL/DIRECTORY
 ```
 
@@ -75,7 +74,6 @@ Please run the following command to convert the saved checkpoint to TinyChat-com
 python -m deepcompressor.backend.tinychat.convert \
     --model-name MODEL_NAME \
     --quant-path /PATH/TO/QUANTIZED-MODEL \
-    --group-size GROUP_SIZE \
     --output-root /ROOT/PATH/TO/OUTPUT-MODEL/DIRECTORY
 ```
 
@@ -106,12 +104,15 @@ Below is the WikiText2 perplexity evaluated with 2048 sequence length. The lower
 | SmoothQuant | W8A8         | 3.23          | 6.38         | 3.14        |  6.28       | 5.54       | 4.95        | 3.36        | 5.73     | 5.13      | 4.23      | 5.29       | 4.69   |
 | GPTQ-R      | W4A16 g128   | 3.46          | 6.64         | 3.42        |  6.56       | 5.63       | 4.99        | 3.43        | 5.83     | 5.20      | 4.22      | 5.39       | 4.68   |
 | AWQ         | W4A16 g128   | 3.22          | 6.60         | 3.20        |  6.54       | 5.60       | 4.97        | 3.41        | 5.78     | 5.19      | 4.21      | 5.37       | 4.67   |
-| QuaRot      | W4A4         | 5.97          | 8.32         | 6.75        |  8.33       | 6.19       | 5.45        | 3.83        | 6.34     | 5.58      | 4.64      | 5.77       | NaN    |
+| QuaRot      | W4A4         | 5.97          | 8.32         | 6.75        |  8.33       | 6.19       | 5.45        | 3.83        | 6.34     | 5.58      | 4.64      | 5.77       | -      |
+| SpinQuant   | W4A4         | 4.80          | 7.42         | 6.27        |  7.37       | 5.96       | 5.24        | 3.71        | 6.14     | 5.39      | 4.56      | -          | -      |
 | Atom        | W4A4 g128    | -             | -            | 4.33        |  7.78       | 6.12       | 5.31        | 3.73        | 6.25     | 5.52      | 4.61      | 5.76       | 4.97   |
-| QoQ         | W4A8KV4      | 3.69          | 6.91         | 3.65        |  6.84       | 5.75       | 5.11        | 3.51        | 5.92     | 5.27      | 4.32      | 5.45       | 4.73   |
-| QoQ         | W4A8KV4 g128 | 3.54          | 6.80         | 3.51        |  6.73       | 5.68       | 5.05        | 3.46        | 5.88     | 5.23      | 4.27      | 5.41       | 4.73   |
+| QoQ         | W4A8KV4      | 3.68          | 6.87         | 3.65        |  6.81       | 5.75       | 5.11        | 3.50        | 5.92     | 5.27      | 4.31      | 5.44       | 4.73   |
+| QoQ         | W4A8KV4 g128 | 3.51          | 6.77         | 3.50        |  6.70       | 5.67       | 5.06        | 3.46        | 5.88     | 5.23      | 4.27      | 5.41       | 4.73   |
 
 \* SmoothQuant is evaluated with per-tensor static KV cache quantization.
+
+\* SpinQuant is calibrated with Wikitext-2 dataset.
 
 ### Efficiency Benchmarks
 
