@@ -295,10 +295,9 @@ class LlmSelfAttentionStruct(SelfAttentionStruct):
                 "past_key_value",
                 "output_attentions",
                 "use_cache",
+                "position_embeddings",
                 "cache_position",
             )
-            if not isinstance(module, LlamaAttention):
-                kwargs = kwargs[:-1]
         else:
             raise ValueError(f"Unsupported attention type: {type(module)}")
         config = AttentionConfigStruct(
