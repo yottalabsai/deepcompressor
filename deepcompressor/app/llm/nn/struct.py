@@ -275,7 +275,9 @@ class LlmSelfAttentionStruct(SelfAttentionStruct):
                 "output_attentions",
             )
         elif isinstance(module, (LlamaAttention, MistralAttention, MixtralAttention, Qwen2Attention, Gemma2Attention)):
-            with_rope, num_query_heads, num_key_value_heads = True, module.num_heads, module.num_key_value_heads
+            with_rope = True
+            num_query_heads = module.config.num_attention_heads
+            num_key_value_heads = module.config.num_key_value_heads
             q_proj, k_proj, v_proj, o_proj = module.q_proj, module.k_proj, module.v_proj, module.o_proj
             q_proj_rname, k_proj_rname, v_proj_rname, o_proj_rname = "q_proj", "k_proj", "v_proj", "o_proj"
             if hasattr(module, "q_rotary_emb"):
