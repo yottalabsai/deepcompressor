@@ -13,6 +13,8 @@ __all__ = ["QuantDataType", "QDType"]
 class QuantDataType:
     """Quantization data type."""
 
+    _registered: tp.ClassVar[dict[str, "QuantDataType"]] = {}
+
     def __init__(
         self,
         total_bits: int,
@@ -81,14 +83,36 @@ class QuantDataType:
             assert codebook_name, "Codebook name must be specified."
             self.__codebook_name = codebook_name
             assert self.max_value >= 0, "Max value must be non-negative."
+            self.__name = self.__codebook_name
+            if self.__name not in QuantDataType._registered:
+                QuantDataType._registered[self.__name] = self
+            else:
+                _registered = QuantDataType._registered[self.__name]
+                assert _registered.total_bits == self.total_bits, "Total bits must be the same as the registered one."
+                assert _registered.exponent_bits == self.exponent_bits, (
+                    "Exponent bits must be the same as the registered one."
+                )
+                assert _registered.signed == self.signed, "Signed must be the same as the registered one."
+                assert _registered.has_subnormal == self.has_subnormal, (
+                    "Subnormal must be the same as the registered one."
+                )
+                assert _registered.has_inf == self.has_inf, "Inf must be the same as the registered one."
+                assert _registered.has_nan == self.has_nan, "NaN must be the same as the registered one."
+                assert _registered.magnitude == self.magnitude, "Magnitude must be the same as the registered one."
+                assert _registered.__codebook is not None, "Codebook must be the same as the registered one."
+                assert torch.allclose(_registered.__codebook.values, self.__codebook.values), (
+                    "Codebook values must be the same as the registered one."
+                )
         else:
             self.__codebook = None
             self.__codebook_name = ""
+            self.__name = self._build_default_name()
+            if self.__name not in QuantDataType._registered:
+                QuantDataType._registered[self.__name] = self
         # endregion
-        # region set split codebooks
-        self.__split_codebooks: dict[tuple[int, bool, int | None, torch.device, torch.dtype], list[Codebook]] = {}
+        # region set codebooks
+        self.__codebooks: dict[tuple[torch.device, torch.dtype], Codebook] = {}
         # endregion
-        self.__name = self.to_str()
 
     # region properties
     @property
@@ -270,110 +294,12 @@ class QuantDataType:
             `QuantDataType`:
                 The unsigned version of the data type.
         """
-        return QuantDataType(
-            total_bits=self.total_bits,
-            signed=False,
-            exponent_bits=self.exponent_bits,
-            has_subnormal=self.has_subnormal,
-            has_nan=self.has_nan,
-            has_inf=self.has_inf,
-            magnitude=self.magnitude,
-        )
+        return QuantDataType.from_str("u" + self.name[1:])
 
-    def __build_split_codebooks(
-        self,
-        *,
-        code_bits: int = 8,
-        normalize: bool = False,
-        split_mask: int | None = None,
-        device: torch.device | str = "cpu",
-        dtype: torch.dtype = torch.float32,
-    ) -> list[Codebook]:
-        if self.is_float_point:
-            return Codebook.build_fp_with_splits(
-                total_bits=self.total_bits,
-                exponent_bits=self.exponent_bits,
-                signed=self.signed,
-                has_subnormal=self.has_subnormal,
-                has_inf=self.has_inf,
-                has_nan=self.has_nan,
-                code_bits=code_bits,
-                normalize=normalize,
-                split_mask=split_mask,
-                device=device,
-                dtype=dtype,
-            )
-        else:
-            return Codebook.build_int_with_splits(
-                total_bits=self.total_bits,
-                signed=self.signed,
-                magnitude=self.magnitude,
-                code_bits=code_bits,
-                normalize=normalize,
-                split_mask=split_mask,
-                device=device,
-                dtype=dtype,
-            )
-
-    def get_split_codebooks(
-        self,
-        *,
-        code_bits: int = 8,
-        normalize: bool = False,
-        split_mask: int | None = None,
-        device: torch.device | str = "cpu",
-        dtype: torch.dtype = torch.float32,
-    ) -> list[Codebook]:
+    def get_codebook(self, *, device: torch.device | str = "cpu", dtype: torch.dtype = torch.float32) -> Codebook:
         """Get a get_codebook of `code_bits` bits for the quantization.
 
         Args:
-            code_bits (`int`, *optional*, defaults to `8`):
-                Number of bits for the codebook.
-            normalize (`bool`, *optional*, defaults to `False`):
-                Whether to normalize the codebook values based on the maximum value.
-            split_mask (`int` or `None`, *optional*, defaults to `None`):
-                Bit mask to split the codebook into parts.
-            device (`torch.device` or `str`, *optional*, defaults to `"cpu"`):
-                Device to create the codebook on.
-            dtype (`torch.dtype`, *optional*, defaults to `torch.float32`):
-                Data type to create the codebook with.
-
-        Returns:
-            `list[Codebook]`:
-                A list of codebooks.
-        """
-        device = torch.device("cpu") if device is None else torch.device(device)
-        key = (code_bits, normalize, split_mask, device, dtype)
-        if key not in self.__split_codebooks:
-            if self.__codebook is not None:
-                self.__split_codebooks[key] = self.__codebook.split(
-                    split_mask=split_mask, normalize=normalize, device=device, dtype=dtype
-                )
-            else:
-                self.__split_codebooks[key] = self.__build_split_codebooks(
-                    code_bits=code_bits,
-                    normalize=normalize,
-                    split_mask=split_mask,
-                    device=device,
-                    dtype=dtype,
-                )
-        return self.__split_codebooks[key]
-
-    def get_codebook(
-        self,
-        *,
-        code_bits: int = 8,
-        normalize: bool = False,
-        device: torch.device | str = "cpu",
-        dtype: torch.dtype = torch.float32,
-    ) -> Codebook:
-        """Get a get_codebook of `code_bits` bits for the quantization.
-
-        Args:
-            code_bits (`int`, *optional*, defaults to `8`):
-                Number of bits for the codebook.
-            normalize (`bool`, *optional*, defaults to `False`):
-                Whether to normalize the codebook values based on the maximum value.
             device (`torch.device` or `str`, *optional*, defaults to `"cpu"`):
                 Device to create the codebook on.
             dtype (`torch.dtype`, *optional*, defaults to `torch.float32`):
@@ -381,18 +307,77 @@ class QuantDataType:
 
         Returns:
             `Codebook`:
-                The codebook.
+                Codebook with the specified device and dtype.
         """
-        return self.get_split_codebooks(code_bits=code_bits, normalize=normalize, device=device, dtype=dtype)[0]
+        device = torch.device("cpu") if device is None else torch.device(device)
+        key = (device, dtype)
+        if key not in self.__codebooks:
+            if self.__codebook is not None:
+                self.__codebooks[key] = self.__codebook.to(device=device, dtype=dtype)
+            else:
+                self.__codebook = self._build_codebook(device=device, dtype=dtype)
+                self.__codebooks[key] = self.__codebook
+        return self.__codebooks[key]
 
-    def __str__(self) -> str:
-        return self.__name
+    def round(self, tensor: torch.Tensor) -> torch.Tensor:
+        """Round the tensor to the nearest quantized value.
 
-    def __repr__(self) -> str:
-        return self.__name
+        Args:
+            tensor (`torch.Tensor`):
+                Tensor to round.
+
+        Returns:
+            `torch.Tensor`:
+                Rounded tensor.
+        """
+        if self.is_integer:
+            return tensor.round()
+        else:
+            return self.get_codebook(device=tensor.device).round(tensor)
+
+    @classmethod
+    def from_str(cls, s: str, /) -> "QuantDataType":
+        """Create a QuantDataType from a string."""
+        if s not in cls._registered:
+            cls._registered[s] = cls._default_from_str(s)
+        return cls._registered[s]
+
+    def _build_codebook(self, *, device: torch.device | str = "cpu", dtype: torch.dtype = torch.float32) -> Codebook:
+        if self.is_float_point:
+            return Codebook.build_for_float_point(
+                total_bits=self.total_bits,
+                exponent_bits=self.exponent_bits,
+                signed=self.signed,
+                has_subnormal=self.has_subnormal,
+                has_inf=self.has_inf,
+                has_nan=self.has_nan,
+                device=device,
+                dtype=dtype,
+            )
+        else:
+            return Codebook.build_for_integer(
+                total_bits=self.total_bits, signed=self.signed, magnitude=self.magnitude, device=device, dtype=dtype
+            )
+
+    def _build_default_name(self) -> str:
+        s = "s" if self.signed else "u"
+        if self.is_float_point:
+            if self.has_subnormal or self.mantissa_bits > 0:
+                s += "fp" if self.has_subnormal else "fn"
+                s += f"{self.total_bits}_e{self.exponent_bits}m{self.mantissa_bits}"
+                s += "_inf" if self.has_inf else ("_nan" if self.has_nan else "_all")
+            else:
+                assert not self.has_subnormal, "Subnormal is not supported for exponent-only floating-point data type."
+                assert not self.has_inf, "Inf is not supported for exponent-only floating-point data type."
+                s += f"exp{self.exponent_bits}"
+                s += "_nan" if self.has_nan else "_all"
+        else:
+            s += "mag" if self.magnitude else "int"
+            s += f"{self.total_bits}"
+        return s
 
     @staticmethod
-    def from_str(s: str, /) -> "QuantDataType":
+    def _default_from_str(s: str, /) -> "QuantDataType":
         s = s.strip().lower()
         signed = s[0] == "s"
         s = s[1:]
@@ -435,29 +420,11 @@ class QuantDataType:
         else:
             raise ValueError(f"Unknown QuantDataType {s}")
 
-    def to_str(self) -> str:
-        """Get the string representation of the QuantDataType.
+    def __str__(self) -> str:
+        return self.__name
 
-        Returns:
-            str: The string representation.
-        """
-        s = "s" if self.signed else "u"
-        if self.__codebook_name:
-            return f"{s}{self.__codebook_name}{self.total_bits}"
-        if self.is_float_point:
-            if self.has_subnormal or self.mantissa_bits > 0:
-                s += "fp" if self.has_subnormal else "fn"
-                s += f"{self.total_bits}_e{self.exponent_bits}m{self.mantissa_bits}"
-                s += "_inf" if self.has_inf else ("_nan" if self.has_nan else "_all")
-            else:
-                assert not self.has_subnormal, "Subnormal is not supported for exponent-only floating-point data type."
-                assert not self.has_inf, "Inf is not supported for exponent-only floating-point data type."
-                s += f"exp{self.exponent_bits}"
-                s += "_nan" if self.has_nan else "_all"
-        else:
-            s += "mag" if self.magnitude else "int"
-            s += f"{self.total_bits}"
-        return s
+    def __repr__(self) -> str:
+        return self.__name
 
     def __eq__(self, value: object) -> bool:
         if not isinstance(value, QuantDataType):

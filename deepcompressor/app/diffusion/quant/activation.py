@@ -10,7 +10,6 @@ from tqdm import tqdm
 
 from deepcompressor.data.cache import IOTensorsCache
 from deepcompressor.data.common import TensorType
-from deepcompressor.data.dtype import QuantDataType
 from deepcompressor.utils import tools
 
 from ..nn.struct import (
@@ -154,10 +153,7 @@ def quantize_diffusion_block_activations(  # noqa: C901
             raise ValueError(f"Unknown module type: {type(modules[0])}")
         if tensor_type == TensorType.Inputs:
             cache_keys = [f"{name}.input" for name in module_names]
-            quantizer_config = config.ipts
-            if getattr(modules[0], "unsigned", False):
-                if isinstance(config.ipts.dtype, QuantDataType) and config.ipts.dtype.is_integer:
-                    quantizer_config = config.unsigned_ipts
+            quantizer_config = config.unsigned_ipts if getattr(modules[0], "unsigned", False) else config.ipts
             activations = layer_cache.get(module_names[0], IOTensorsCache()).inputs
         else:
             cache_keys = [f"{name}.output" for name in module_names]

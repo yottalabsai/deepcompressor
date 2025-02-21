@@ -143,7 +143,7 @@ def patch_attention(model: nn.Module) -> nn.Module:
     logger = tools.logging.getLogger(f"{__name__}.ModelPatcher")
     for module_name, module in model.named_modules():
         classname = type(module).__name__
-        if classname.lower().endswith(("attention", "attention2")):
+        if classname.lower().endswith("attention"):
             forward_name = ""
             if isinstance(module.forward, functools.partial):
                 if hasattr(module, "_deepcompressor_orig_forward"):
