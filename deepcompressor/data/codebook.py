@@ -46,7 +46,7 @@ class Codebook:
                 A rounded tensor.
         """
         dtype = tensor.dtype
-        tensor = tensor.to(self.values.dtype)
+        tensor = tensor.to(self.values.dtype).contiguous()
         return _C.round_to_nearest_in_codebook_cuda(tensor, self.values).to(dtype=dtype)
 
     def to(self, *, device: torch.device | None = None, dtype: torch.dtype | None = None) -> "Codebook":

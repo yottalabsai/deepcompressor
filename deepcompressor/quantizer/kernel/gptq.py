@@ -278,7 +278,7 @@ def gptq_quantize(  # noqa: C901
     for i in range(1, len_view_shape // 2):
         permute_dims.append(1 + i)
         permute_dims.append(len_view_shape // 2 + i)
-    qtensor = qtensor.permute(*permute_dims).reshape(view_shape)
+    qtensor = qtensor.permute(*permute_dims).reshape(view_shape).contiguous()
     # endregion
     assert not qtensor.isnan().any(), "GPTQ Quantized tensor contains NaN."
     assert not qtensor.isinf().any(), "GPTQ Quantized tensor contains Inf."
