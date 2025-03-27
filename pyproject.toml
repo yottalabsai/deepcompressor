@@ -1,6 +1,6 @@
 [tool.poetry]
-name = "deepcompressor"
-version = "0.0.1"
+name = "deepcompressor-toolkit"
+version = "0.0.2"
 description = "This package is model compression toolkit for large language models and diffusion models."
 authors = [
     "Yujun Lin",
@@ -10,6 +10,7 @@ authors = [
     "Haotian Tang",
     "Song Han",
 ]
+packages = [ { include = "deepcompressor" } ]
 license = "Apache-2.0"
 readme = "README.md"
 
@@ -45,9 +46,9 @@ cd-fvd = ">= 0.1.1"
 xformers = ">= 0.0.26"
 pyav = ">= 13.0.0"
 clip = ">= 0.2.0"
-image_reward = { git = "git@github.com:THUDM/ImageReward.git", branch = "main" }
+image_reward = { git = "https://github.com/THUDM/ImageReward.git", branch = "main" }
 
-[tool.poetry.dev-dependencies]
+[tool.poetry.group.dev.dependencies]
 matplotlib = ">= 3.8.4"
 ipython = ">= 8.0.0"
 

@@ -1,12 +1,11 @@
 # -*- coding: utf-8 -*-
 """Codebook for quantization."""
 
-from collections import defaultdict
 from dataclasses import dataclass
-from itertools import repeat
 
-import bitsandbytes.functional as bnb
 import torch
+
+from deepcompressor.csrc.load import _C
 
 __all__ = ["Codebook"]
 
@@ -18,11 +17,7 @@ class Codebook:
     Attributes:
         size (`int`):
             Number of values in the codebook.
-        norm_value (`float` or `None`):
-            Normalization value.
-        value_bits (`int`):
-            Number of bits for the value.
-        code_bits (`int`):
+        bits (`int`):
             Number of bits for the binary code.
         values (`torch.FloatTensor`):
             A value book in ascending order.
@@ -31,69 +26,56 @@ class Codebook:
     """
 
     size: int
-    norm_value: float | None
-    value_bits: int
-    code_bits: int
+    bits: int
     values: torch.Tensor
     codes: torch.Tensor
 
     def __post_init__(self):
         assert self.size <= self.values.numel(), "Codebook size is larger than the values size"
         assert self.values.shape == self.codes.shape, "Values and Codes must have the same shape"
-        assert self.codes.numel() == 2**self.code_bits, "Codebook size must be 2**code_bits"
-        if self.norm_value is not None:
-            assert self.norm_value > 0, "Normalization value must be positive"
 
-    @property
-    def normalized(self) -> bool:
-        """Check if the codebook is normalized.
-
-        Returns:
-            bool:
-                `True` if the codebook is normalized, `False` otherwise.
-        """
-        return self.norm_value is not None
-
-    def quantize(self, tensor: torch.Tensor) -> torch.Tensor:
-        """Quantize a tensor with a codebook.
+    def round(self, tensor: torch.Tensor) -> torch.Tensor:
+        """Round the tensor to the nearest value in the codebook.
 
         Args:
             tensor (`torch.Tensor`):
-                A tensor to quantize.
+                A tensor to round.
 
         Returns:
             `torch.Tensor`:
-                A quantized tensor.
+                A rounded tensor.
         """
-        dtype, shape, numel = tensor.dtype, tensor.shape, tensor.numel()
-        tensor = tensor.contiguous().to(torch.float32)
-        if self.norm_value is not None:
-            tensor = tensor.div(self.norm_value)
-        block_size = 128 * 512 * 4096
-        if numel > block_size:
-            tensor = tensor.view(-1)
-            out = torch.empty_like(tensor)
-            for i in range(0, numel, block_size):
-                start, end = i, min(i + block_size, numel)
-                bnb.dequantize_no_absmax(
-                    bnb.quantize_no_absmax(tensor[start:end], code=self.values),
-                    code=self.values,
-                    out=out[start:end],
-                )
-            out = out.view(shape)
-        else:
-            out = bnb.dequantize_no_absmax(bnb.quantize_no_absmax(tensor, code=self.values), code=self.values)
-        if self.norm_value is not None:
-            out = out.mul_(self.norm_value)
-        return out.to(dtype=dtype)
+        dtype = tensor.dtype
+        tensor = tensor.to(self.values.dtype).contiguous()
+        return _C.round_to_nearest_in_codebook_cuda(tensor, self.values).to(dtype=dtype)
+
+    def to(self, *, device: torch.device | None = None, dtype: torch.dtype | None = None) -> "Codebook":
+        """Move the codebook to the specified device and dtype.
+
+        Args:
+            device (`torch.device`):
+                Device to move the codebook.
+            dtype (`torch.dtype`):
+                Dtype to move the codebook.
+
+        Returns:
+            `Codebook`:
+                A codebook.
+        """
+        device = device if device is not None else self.values.device
+        dtype = dtype if dtype is not None else self.values.dtype
+        return Codebook(
+            size=self.size,
+            bits=self.bits,
+            values=self.values.to(device=device, dtype=dtype),
+            codes=self.codes.to(device=device),
+        )
 
     @staticmethod
     def construct(
         maps: list[tuple[float, int]],
         *,
-        value_bits: int,
-        code_bits: int,
-        normalize: bool | float | None = None,
+        bits: int,
         device: torch.device | str = "cpu",
         dtype: torch.dtype = torch.float32,
     ) -> "Codebook":
@@ -102,12 +84,8 @@ class Codebook:
         Args:
             maps (`list[tuple[float, int]]`):
                 A list of tuples of (value, binary code).
-            value_bits (`int`):
-                Number of bits for the value.
-            code_bits (`int`):
+            bits (`int`):
                 Number of bits for the binary code.
-            normalize (`bool` or `float` or `None`, *optional*, defaults to `None`):
-                Normalization value. If `True`, normalize the values based on the maximum value.
             device (`torch.device` or str, *optional*, defaults to `"cpu"`):
                 Device to put the codebook and binarybook on.
             dtype (`torch.dtype`, *optional*, defaults to `torch.float32`):
@@ -116,96 +94,22 @@ class Codebook:
         Returns:
             `Codebook`:
                 A codebook.
-
-        Raises:
-            `AssertionError`:
-                If the number of values is greater than 2**code_bits,
-                or if normalize value is smaller than codebook max absolute value.
         """
-        if code_bits > 32:
-            raise NotImplementedError("Codebook with more than 32 bits is not supported")
-        assert len(maps) <= 2**code_bits, "Too many (value, code) maps for the code bits"
+        if bits > 8:
+            raise NotImplementedError("Codebook with more than 8 bits is not supported")
+        assert len(maps) <= 2**bits, "Too many (value, code) maps for the code bits"
         size = len(maps)
-        maps.sort(key=lambda x: abs(x[0]))
-        maps.extend(repeat(maps[0], 2**code_bits - size))  # fill the gap with the value of the smallest magnitude
         maps.sort(key=lambda x: x[0])
         values = torch.tensor([v[0] for v in maps], device=device, dtype=dtype)
         codes = torch.tensor(
             [v[1] for v in maps],
-            dtype=torch.uint8 if code_bits <= 8 else (torch.int16 if code_bits < 16 else torch.int32),
+            dtype=torch.uint8 if bits <= 8 else (torch.int16 if bits < 16 else torch.int32),
             device=device,
         )
-        if normalize:
-            if isinstance(normalize, bool):
-                normalize = values.abs().max().item()
-            assert isinstance(normalize, (float, int)), "Normalization value must be a float or an int"
-            assert values.abs().max() <= normalize, "The maximum value is larger than the given normalization value"
-            assert normalize > 0, "Normalization value must be positive"
-            values.div_(normalize)
-        else:
-            normalize = None
-        return Codebook(
-            size=size,
-            norm_value=normalize,
-            value_bits=value_bits,
-            code_bits=code_bits,
-            values=values,
-            codes=codes,
-        )
+        return Codebook(size=size, bits=bits, values=values, codes=codes)
 
     @staticmethod
-    def build_with_splits(
-        maps: list[tuple[float, int]],
-        *,
-        value_bits: int,
-        code_bits: int,
-        normalize: bool,
-        split_mask: int | None = None,
-        device: torch.device | str = "cpu",
-        dtype: torch.dtype = torch.float32,
-    ) -> list["Codebook"]:
-        """Create a map of values to a code of `code_bits` bits.
-
-        Args:
-            maps (`list[tuple[float, int]]`): A list of tuples of (value, binary code).
-            value_bits (`int`): Number of bits for the value.
-            code_bits (`int`): Number of bits for the binary code.
-            normalize (`bool`): Whether to normalize the values based on the maximum value.
-            split_mask (`int` or `None`, *optional*, defaults to `None`):
-                A mask to split the values into multiple codebooks.
-            device (`torch.device` or str, *optional*, defaults to `"cpu"`):
-                Device to put the codebook and binarybook on.
-            dtype (`torch.dtype`, *optional*, defaults to `torch.float32`):
-                Dtype of the codebook.
-
-        Returns:
-            `list[Codebook]`: A list of codebooks.
-        """
-        if split_mask is None:
-            split_maps = [maps]
-            max_value = max(abs(v) for v, _ in maps)
-        else:
-            _split_maps: dict[int, list[tuple[float, int]]] = defaultdict(list)
-            max_value = -float("inf")
-            for value, code in maps:
-                split = code & split_mask
-                _split_maps[split].append((value, code))
-                max_value = max(max_value, abs(value))
-            split_maps = [_split_maps[split] for split in sorted(_split_maps)]
-        return [
-            Codebook.construct(
-                maps=split,
-                value_bits=value_bits,
-                code_bits=code_bits,
-                normalize=max_value if normalize else None,
-                device=device,
-                dtype=dtype,
-            )
-            for split in split_maps
-        ]
-
-    @staticmethod
-    def build_fp_with_splits(
+    def build_for_float_point(
         *,
         total_bits: int,
         exponent_bits: int,
@@ -213,12 +117,9 @@ class Codebook:
         has_subnormal: bool = True,
         has_inf: bool = False,
         has_nan: bool = False,
-        code_bits: int = 8,
-        normalize: bool = False,
-        split_mask: int | None = None,
         device: torch.device | str = "cpu",
         dtype: torch.dtype = torch.float32,
-    ) -> list["Codebook"]:
+    ) -> "Codebook":
         """Create a map of floating point values to a code of `code_bits` bits.
 
         Args:
@@ -232,12 +133,6 @@ class Codebook:
                 Whether to include infinity.
             has_nan (`bool`, *optional*, defaults to `False`):
                 Whether to include NaN.
-            code_bits (`int`, *optional*, defaults to `8`):
-                Number of bits for the code.
-            normalize (`bool`, *optional*, defaults to `False`):
-                Whether to normalize the values based on the maximum value.
-            split_mask (`int`, *optional*, defaults to `None`):
-                A mask to split the values into multiple codebooks.
             device (`torch.device` or str, *optional*, defaults to `"cpu"`):
                 Device to put the codebook on.
             dtype (`torch.dtype`, *optional*, defaults to `torch.float32`):
@@ -250,9 +145,6 @@ class Codebook:
         mantissa_bits = total_bits - exponent_bits - int(signed)
         assert exponent_bits > 0, "Exponent bits must be positive"
         assert mantissa_bits >= 0, "Mantissa bits must be non-negative"
-        assert (
-            total_bits <= code_bits
-        ), f"Too many bits ({exponent_bits} + {mantissa_bits} + {int(signed)} = {total_bits}) for {code_bits}-bit code"
         has_nan = has_inf or has_nan
 
         sign_mask = 1 << (total_bits - 1)
@@ -275,28 +167,17 @@ class Codebook:
                 code += 1
         if mantissa_bits > 0 and not has_inf and has_nan:
             maps = maps[: -(1 + int(signed))]
-        return Codebook.build_with_splits(
-            maps,
-            value_bits=total_bits,
-            code_bits=code_bits,
-            normalize=normalize,
-            split_mask=split_mask,
-            device=device,
-            dtype=dtype,
-        )
+        return Codebook.construct(maps, bits=total_bits, device=device, dtype=dtype)
 
     @staticmethod
-    def build_int_with_splits(
+    def build_for_integer(
         *,
         total_bits: int,
         signed: bool = True,
         magnitude: bool = False,
-        code_bits: int = 8,
-        normalize: bool = False,
-        split_mask: int | None = None,
         device: torch.device | str = "cpu",
         dtype: torch.dtype = torch.float32,
-    ) -> list["Codebook"]:
+    ) -> "Codebook":
         """Create a map of integer values to a code of `code_bits` bits.
 
         Args:
@@ -306,12 +187,6 @@ class Codebook:
                 Whether to use signed code.
             magnitude (`bool`, *optional*, defaults to `False`):
                 Whether to use magnitude-based integer.
-            code_bits (`int`, *optional*, defaults to `8`):
-                Number of bits for the code.
-            normalize (`bool`, *optional*, defaults to `False`):
-                Whether to normalize the values based on the maximum value.
-            split_mask (`int`, *optional*, defaults to `None`):
-                A mask to split the values into multiple codebooks.
             device (`torch.device` or `str`, *optional*, defaults to `"cpu"`):
                 Device to put the codebook on.
             dtype (`torch.dtype`, *optional*, defaults to `torch.float32`):
@@ -336,49 +211,4 @@ class Codebook:
             else:
                 code = end_value + end_value + value
             maps.append((value, code))
-        return Codebook.build_with_splits(
-            maps,
-            value_bits=total_bits,
-            code_bits=code_bits,
-            normalize=normalize,
-            split_mask=split_mask,
-            device=device,
-            dtype=dtype,
-        )
-
-    def split(
-        self,
-        split_mask: int | None,
-        normalize: bool | None = None,
-        device: torch.device | str = "cpu",
-        dtype: torch.dtype = torch.float32,
-    ) -> list["Codebook"]:
-        """Split a codebook into multiple codebooks.
-
-        Args:
-            split_mask (`int` or `None`):
-                A mask to split the values into multiple codebooks.
-            normalize (`bool`, *optional*, defaults to `None`):
-                Whether to normalize the values based on the maximum value.
-            device (`torch.device` or str, *optional*, defaults to `"cpu"`):
-                Device to put the codebook on.
-            dtype (`torch.dtype`, *optional*, defaults to `torch.float32`):
-                Dtype of the codebook.
-
-        Returns:
-            `list[Codebook]`:
-                A list of codebooks.
-        """
-        values = self.values.view(-1)
-        codes = self.codes.view(-1)
-        if self.norm_value is not None:
-            values = values.mul(self.norm_value)
-        return Codebook.build_with_splits(
-            [(float(value.item()), int(code.item())) for value, code in zip(values, codes, strict=True)],
-            value_bits=self.value_bits,
-            code_bits=self.code_bits,
-            normalize=self.normalized if normalize is None else normalize,
-            split_mask=split_mask,
-            device=device,
-            dtype=dtype,
-        )
+        return Codebook.construct(maps, bits=total_bits, device=device, dtype=dtype)

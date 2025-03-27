@@ -11,33 +11,37 @@ __all__ = ["convert_to_qserve_w4x8y16_linear_weight", "convert_to_qserve_w8x8y16
 class QServePacker(MmaWeightPackerBase):
     def __init__(self):
         super().__init__(bits=8, warp_n=32)
-        assert self.num_n_frags == 2
+        assert self.num_n_packs >= 2 and self.num_n_packs % 2 == 0, (
+            f"num_n_packs should be even, but got {self.num_n_packs}."
+        )
 
     def pack_weight(self, weight: torch.Tensor) -> torch.Tensor:
         assert weight.min() >= 0, "quantized weight should be non-negative."
         assert weight.max() <= 15, "quantized weight should be less than 16."
         assert weight.dtype == torch.uint8, f"quantized weight should be torch.uint8, but got {weight.dtype}."
         n, k = weight.shape
-        assert n % self.warp_n == 0, "output channel size should be divisible by warp_n."
-        assert k % self.warp_k == 0, "input channel size should be divisible by warp_k."
-        n_warps, k_warps = n // self.warp_n, k // self.warp_k
+        assert n % self.mem_n == 0, f"output channel size ({n}) should be divisible by mem_n ({self.mem_n})."
+        assert k % self.mem_k == 0, f"input channel size ({k}) should be divisible by mem_k ({self.mem_k})."
+        n_tiles, k_tiles = n // self.mem_n, k // self.mem_k
         weight = weight.reshape(
-            n_warps,
-            self.num_n_frags,  # always 2
-            self.n_pack_size,  # always 2
+            n_tiles,
+            self.num_n_packs,  # num_n_packs = 2 when warp_n = 32
+            self.n_pack_size,  # always 2 in QServe
             self.num_n_lanes,  # constant 8
-            # self.lane_n,  # constant 1
-            k_warps,
-            # self.num_k_frags,  # constant 1
+            self.reg_n,  # constant 1
+            k_tiles,
+            self.num_k_packs,  # constant 1
             self.k_pack_size,  # always 2
             self.num_k_lanes,  # constant 4
-            self.lane_k,  # always 4 = 32 bits / 8 bits
+            self.reg_k,  # always 4 = 32 bits / 8 bits in QServe
         )
-        weight = weight.permute(1, 0, 4, 3, 6, 5, 2, 7).contiguous()
-        assert weight.shape[3:-1] == (8, 4, 2, 2)
+        # (n_tiles, num_n_packs, n_pack_size, num_n_lanes, reg_n, k_tiles, num_k_packs, k_pack_size, num_k_lanes, reg_k)
+        # =>
+        # (num_n_packs, n_tiles, k_tiles, num_k_packs, num_n_lanes, num_k_lanes, k_pack_size, n_pack_size, reg_n, reg_k)
+        weight = weight.permute(1, 0, 5, 6, 3, 8, 7, 2, 4, 9).contiguous()
+        assert weight.shape[4:-2] == (8, 4, 2, 2)
         weight = (weight[1] << 4) + weight[0]
-        weight = weight.view(n_warps, k_warps, self.num_lanes, self.pack_size, self.lane_k).view(torch.int8)
-        return weight.view(n, k // 2)
+        return weight.view(torch.int8).view(n, k // 2)
 
     def pack_scale(
         self, scale: torch.Tensor, zero: torch.Tensor | None = None, subscale: torch.Tensor | None = None
@@ -48,9 +52,12 @@ class QServePacker(MmaWeightPackerBase):
             zero = zero.view(-1)
         else:
             assert subscale.dtype == torch.int8, f"subscale should be torch.int8, but got {subscale.dtype}."
-            view_shape = (n // self.warp_n, self.num_n_frags * self.n_pack_size, self.num_n_lanes, -1)
-            subscale = subscale.view(view_shape).permute(3, 0, 2, 1).contiguous().view(-1, n)
-            zero = zero.view(view_shape).permute(3, 0, 2, 1).contiguous().view(-1, n)
+            view_shape = (n // self.mem_n, self.num_n_packs, self.n_pack_size, self.num_n_lanes, self.reg_n, -1)
+            # (n_tiles, num_n_packs, n_pack_size, num_n_lanes, reg_n, -1)
+            # =>
+            # (-1, n_tiles, num_n_packs, num_n_lanes, n_pack_size, reg_n)
+            subscale = subscale.view(view_shape).permute(5, 0, 1, 3, 2, 4).contiguous().view(-1, n)
+            zero = zero.view(view_shape).permute(5, 0, 1, 3, 2, 4).contiguous().view(-1, n)
         return scale, zero, subscale
 
 

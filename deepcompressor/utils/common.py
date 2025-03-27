@@ -163,13 +163,16 @@ def tree_split(tree: tp.Any) -> list[tp.Any]:
             return tree.shape[0]
         return None
 
-    def get_batch(tree: tp.Any, batch_id: int) -> tp.Any:
+    def get_batch(tree: tp.Any, batch_id: int, batch_size: int) -> tp.Any:
         if isinstance(tree, dict):
-            return {k: get_batch(v, batch_id) for k, v in tree.items()}
+            return {k: get_batch(v, batch_id, batch_size=batch_size) for k, v in tree.items()}
         elif isinstance(tree, (list, tuple)):
-            return [get_batch(samples, batch_id) for samples in tree]
+            return [get_batch(samples, batch_id, batch_size=batch_size) for samples in tree]
         elif isinstance(tree, torch.Tensor) and tree.ndim > 0:
-            return tree[batch_id : batch_id + 1]
+            if tree.shape[0] == batch_size:
+                return tree[batch_id : batch_id + 1]
+            else:
+                return tree
         else:
             return tree
 
@@ -177,7 +180,7 @@ def tree_split(tree: tp.Any) -> list[tp.Any]:
     batch_size = get_batch_size(tree)
     assert batch_size is not None, "Cannot determine batch size"
     for i in range(batch_size):
-        ret.append(get_batch(tree, i))
+        ret.append(get_batch(tree, i, batch_size=batch_size))
     return ret
 
 
@@ -188,7 +191,11 @@ def tree_collate(batch: list[tp.Any] | tuple[tp.Any, ...]) -> tp.Any:
     elif isinstance(batch[0], (list, tuple)):
         return [tree_collate(samples) for samples in zip(*batch, strict=True)]
     elif isinstance(batch[0], torch.Tensor):
-        return torch.cat(batch)
+        # if all tensors in batch are exactly the same, return the tensor itself
+        if all(torch.equal(batch[0], b) for b in batch):
+            return batch[0]
+        else:
+            return torch.cat(batch)
     else:
         return batch[0]
 

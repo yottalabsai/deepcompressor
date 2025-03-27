@@ -19,14 +19,26 @@ def convert_to_nunchaku_w4x4y16_linear_state_dict(
     shift: torch.Tensor | None = None,
     smooth_fused: bool = False,
     float_point: bool = False,
+    subscale: torch.Tensor | None = None,
 ) -> dict[str, torch.Tensor]:
-    if scale.numel() > 1:  # not per-tensor scale
-        assert scale.ndim == weight.ndim * 2
-        assert scale.numel() == scale.shape[0] * scale.shape[2]
-        scale = scale.view(scale.shape[0], 1, scale.shape[2], 1)
     if weight.ndim > 2:  # pointwise conv
         assert weight.numel() == weight.shape[0] * weight.shape[1]
         weight = weight.view(weight.shape[0], weight.shape[1])
+    if scale.numel() > 1:
+        assert scale.ndim == weight.ndim * 2
+        assert scale.numel() == scale.shape[0] * scale.shape[2]
+        scale = scale.view(scale.shape[0], 1, scale.shape[2], 1)
+        scale_key = "wcscales" if scale.shape[2] == 1 else "wscales"
+    else:
+        scale_key = "wtscale"
+    if subscale is None:
+        subscale_key = ""
+    else:
+        assert subscale.ndim == weight.ndim * 2
+        assert subscale.numel() == subscale.shape[0] * subscale.shape[2]
+        assert subscale.numel() > 1
+        subscale = subscale.view(subscale.shape[0], 1, subscale.shape[2], 1)
+        subscale_key = "wcscales" if subscale.shape[2] == 1 else "wscales"
     if lora is not None and (smooth is not None or shift is not None):
         # unsmooth lora down projection
         dtype = weight.dtype
@@ -43,12 +55,14 @@ def convert_to_nunchaku_w4x4y16_linear_state_dict(
             bias = bias.add_((lora_up.to(dtype=torch.float64) @ lora_down @ shift).view(-1))
             bias = bias.to(dtype=dtype)
         lora = (lora_down.to(dtype=dtype), lora_up)
-    weight, scale, bias, smooth, lora = convert_to_nunchaku_w4x4y16_linear_weight(
-        weight, scale=scale, bias=bias, smooth=smooth, lora=lora
+    weight, scale, bias, smooth, lora, subscale = convert_to_nunchaku_w4x4y16_linear_weight(
+        weight, scale=scale, bias=bias, smooth=smooth, lora=lora, float_point=float_point, subscale=subscale
     )
     state_dict: dict[str, torch.Tensor] = {}
     state_dict["qweight"] = weight
-    state_dict["wscales"] = scale
+    state_dict[scale_key] = scale
+    if subscale is not None:
+        state_dict[subscale_key] = subscale
     state_dict["bias"] = bias
     state_dict["smooth_orig"] = smooth
     state_dict["smooth"] = torch.ones_like(smooth) if smooth_fused else smooth.clone()
@@ -62,7 +76,6 @@ def convert_to_nunchaku_w4x16_adanorm_single_state_dict(
     weight: torch.Tensor,
     scale: torch.Tensor,
     bias: torch.Tensor,
-    float_point: bool = False,
 ) -> dict[str, torch.Tensor]:
     weight, scale, zero, bias = convert_to_nunchaku_w4x16_linear_weight(
         weight, scale=scale, bias=bias, adanorm_splits=3
@@ -80,7 +93,6 @@ def convert_to_nunchaku_w4x16_adanorm_zero_state_dict(
     weight: torch.Tensor,
     scale: torch.Tensor,
     bias: torch.Tensor,
-    float_point: bool = False,
 ) -> dict[str, torch.Tensor]:
     weight, scale, zero, bias = convert_to_nunchaku_w4x16_linear_weight(
         weight, scale=scale, bias=bias, adanorm_splits=6
@@ -130,18 +142,33 @@ def convert_to_nunchaku_transformer_block_state_dict(
         weight = [candidates[f"{candidate_name}.weight"] for candidate_name in candidate_names]
         bias = [candidates.get(f"{candidate_name}.bias", None) for candidate_name in candidate_names]
         scale = [scale_dict.get(f"{candidate_name}.weight.scale.0", None) for candidate_name in candidate_names]
+        subscale = [scale_dict.get(f"{candidate_name}.weight.scale.1", None) for candidate_name in candidate_names]
         if len(weight) > 1:
             bias = None if all(b is None for b in bias) else torch.concat(bias, dim=0)
+            if all(s is None for s in scale):
+                scale = None
+            else:
+                if scale[0].numel() == 1:  # switch from per-tensor to per-channel scale
+                    assert all(s.numel() == 1 for s in scale)
+                    scale = torch.concat(
+                        [
+                            s.view(-1).expand(weight[i].shape[0]).reshape(weight[i].shape[0], 1, 1, 1)
+                            for i, s in enumerate(scale)
+                        ],
+                        dim=0,
+                    )
+                else:
+                    scale = torch.concat(scale, dim=0)
+            subscale = None if all(s is None for s in subscale) else torch.concat(subscale, dim=0)
             weight = torch.concat(weight, dim=0)
-            scale = None if all(s is None for s in scale) else torch.concat(scale, dim=0)
         else:
-            weight, bias, scale = weight[0], bias[0], scale[0]
+            weight, bias, scale, subscale = weight[0], bias[0], scale[0], subscale[0]
         smooth = smooth_dict.get(f"{block_name}.{smooth_name_map.get(converted_local_name, '')}", None)
         branch = branch_dict.get(f"{block_name}.{branch_name_map.get(converted_local_name, '')}", None)
         if branch is not None:
             branch = (branch["a.weight"], branch["b.weight"])
         if scale is None:
-            assert smooth is None and branch is None
+            assert smooth is None and branch is None and subscale is None
             print(f"  - Copying {block_name} weights of {candidate_local_names} as {converted_local_name}.weight")
             converted[f"{converted_local_name}.weight"] = weight.clone().cpu()
             if bias is not None:
@@ -152,29 +179,25 @@ def convert_to_nunchaku_transformer_block_state_dict(
             print(f"  - Converting {block_name} weights of {candidate_local_names} to {converted_local_name}.")
             update_state_dict(
                 converted,
-                convert_to_nunchaku_w4x16_adanorm_single_state_dict(
-                    weight=weight, scale=scale, bias=bias, float_point=float_point
-                ),
+                convert_to_nunchaku_w4x16_adanorm_single_state_dict(weight=weight, scale=scale, bias=bias),
                 prefix=converted_local_name,
             )
         elif convert_map[converted_local_name] == "adanorm_zero":
             print(f"  - Converting {block_name} weights of {candidate_local_names} to {converted_local_name}.")
             update_state_dict(
                 converted,
-                convert_to_nunchaku_w4x16_adanorm_zero_state_dict(
-                    weight=weight, scale=scale, bias=bias, float_point=float_point
-                ),
+                convert_to_nunchaku_w4x16_adanorm_zero_state_dict(weight=weight, scale=scale, bias=bias),
                 prefix=converted_local_name,
             )
         elif convert_map[converted_local_name] == "linear":
             smooth_fused = "out_proj" in converted_local_name and smooth_dict.get("proj.fuse_when_possible", True)
-            print(
-                f"  - Converting {block_name} weights of {candidate_local_names} to {converted_local_name}."
-                f" (smooth_fused={smooth_fused})"
-            )
             shift = [candidates.get(f"{candidate_name[:-7]}.shift", None) for candidate_name in candidate_names]
             assert all(s == shift[0] for s in shift)
             shift = shift[0]
+            print(
+                f"  - Converting {block_name} weights of {candidate_local_names} to {converted_local_name}."
+                f" (smooth_fused={smooth_fused}, shifted={shift is not None}, float_point={float_point})"
+            )
             update_state_dict(
                 converted,
                 convert_to_nunchaku_w4x4y16_linear_state_dict(
@@ -186,6 +209,7 @@ def convert_to_nunchaku_transformer_block_state_dict(
                     shift=shift,
                     smooth_fused=smooth_fused,
                     float_point=float_point,
+                    subscale=subscale,
                 ),
                 prefix=converted_local_name,
             )
@@ -363,8 +387,6 @@ if __name__ == "__main__":
     parser.add_argument("--model-name", type=str, default=None, help="name of the model.")
     parser.add_argument("--float-point", action="store_true", help="use float-point 4-bit quantization.")
     args = parser.parse_args()
-    if args.float_point:
-        raise NotImplementedError("Only int4 quantization is currently supported.")
     if not args.output_root:
         args.output_root = args.quant_path
     if args.model_name is None:

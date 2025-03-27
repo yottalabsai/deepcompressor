@@ -10,7 +10,7 @@ from deepcompressor.calib.config import SkipBasedDynamicRangeCalibConfig, SkipBa
 from deepcompressor.data.dtype import QuantDataType
 from deepcompressor.quantizer.config import QuantizerConfig
 from deepcompressor.quantizer.kernel import QuantGptqConfig
-from deepcompressor.utils.config import EnableConfig, SkipBasedConfig
+from deepcompressor.utils.config import EnableConfig, IncludeBasedConfig, SkipBasedConfig
 
 __all__ = [
     "DiffusionQuantizerConfig",
@@ -42,7 +42,7 @@ class DiffusionGPTQConfig(SkipBasedConfig, QuantGptqConfig):
 
 @configclass
 @dataclass
-class DiffusionQuantizerConfig(SkipBasedConfig, QuantizerConfig):
+class DiffusionQuantizerConfig(QuantizerConfig):
     """Diffusion model quantizer configuration.
 
     Args:
@@ -54,8 +54,6 @@ class DiffusionQuantizerConfig(SkipBasedConfig, QuantizerConfig):
             The shapes for per-group quantization.
         scale_dtypes (`Sequence[torch.dtype | QuantDataType | None]`, *optional*, defaults to `(None,)`):
             The quantization scale data type for per-group quantization.
-        skips (`[str]`, *optional*, defaults to `[]`):
-            The keys of the modules to skip.
         static (`bool`, *optional*, defaults to `False`):
             Whether to use static quantization.
         kernel_gptq (`DiffusionGPTQConfig` or `None`, *optional*, defaults to `None`):
@@ -78,7 +76,6 @@ class DiffusionQuantizerConfig(SkipBasedConfig, QuantizerConfig):
             self.kernel_gptq = None
             self.low_rank = None
             self.calib_range = None
-            self.skips.clear()
         if self.kernel_gptq is not None and not self.kernel_gptq.is_enabled():
             self.kernel_gptq = None
         if self.static and self.calib_range is None:
@@ -121,7 +118,39 @@ class DiffusionQuantizerConfig(SkipBasedConfig, QuantizerConfig):
 
 @configclass
 @dataclass
-class DiffusionWeightQuantizerConfig(DiffusionQuantizerConfig):
+class SkipBasedDiffusionQuantizerConfig(SkipBasedConfig, DiffusionQuantizerConfig):
+    """Diffusion model quantizer configuration.
+
+    Args:
+        dtype (`QuantDataType` or `None`, *optional*, defaults to `None`):
+            The quantization data type.
+        zero_point (`ZeroPointDomain` or `None`, *optional*, defaults to `None`):
+            The zero-point domain.
+        group_shapes (`Sequence[Sequence[int]]`, *optional*, defaults to `((-1, -1, -1),)`):
+            The shapes for per-group quantization.
+        scale_dtypes (`Sequence[torch.dtype | QuantDataType | None]`, *optional*, defaults to `(None,)`):
+            The quantization scale data type for per-group quantization.
+        skips (`[str]`, *optional*, defaults to `[]`):
+            The keys of the modules to skip.
+        static (`bool`, *optional*, defaults to `False`):
+            Whether to use static quantization.
+        kernel_gptq (`DiffusionGPTQConfig` or `None`, *optional*, defaults to `None`):
+            The gptq quantization configuration.
+        low_rank (`SkipBasedQuantLowRankCalibConfig` or `None`, *optional*, defaults to `None`):
+            The quantization low-rank branch calibration configuration.
+        calib_range (`DynamicRangeCalibConfig` or `None`, *optional*, defaults to `None`):
+            The quantizatizer dynamic range calibration configuration.
+    """
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if self.quant_dtype is None:
+            self.skips.clear()
+
+
+@configclass
+@dataclass
+class DiffusionWeightQuantizerConfig(SkipBasedDiffusionQuantizerConfig):
     """Diffusion model weight quantizer configuration.
 
     Args:
@@ -150,7 +179,7 @@ class DiffusionWeightQuantizerConfig(DiffusionQuantizerConfig):
 
 @configclass
 @dataclass
-class DiffusionActivationQuantizerConfig(DiffusionQuantizerConfig):
+class DiffusionActivationQuantizerConfig(SkipBasedDiffusionQuantizerConfig):
     """Diffusion model activation quantizer configuration.
 
     Args:
@@ -235,6 +264,38 @@ class DiffusionActivationQuantizerConfig(DiffusionQuantizerConfig):
 
 @configclass
 @dataclass
+class DiffusionExtraWeightQuantizerConfig(IncludeBasedConfig, DiffusionQuantizerConfig):
+    """Diffusion model extra weight quantizer configuration.
+
+    Args:
+        dtype (`QuantDataType` or `None`, *optional*, defaults to `None`):
+            The quantization data type.
+        zero_point (`ZeroPointDomain` or `None`, *optional*, defaults to `None`):
+            The zero-point domain.
+        group_shapes (`Sequence[Sequence[int]]`, *optional*, defaults to `((-1, -1, -1),)`):
+            The shapes for per-group quantization.
+        scale_dtypes (`Sequence[torch.dtype | QuantDataType | None]`, *optional*, defaults to `(None,)`):
+            The quantization scale data type for per-group quantization.
+        includes (`list[str]`, *optional*, defaults to `[]`):
+            The keys of the modules to include.
+        low_rank (`SkipBasedQuantLowRankCalibConfig` or `None`, *optional*, defaults to `None`):
+            The quantization low-rank branch calibration configuration.
+        calib_range (`DynamicRangeCalibConfig` or `None`, *optional*, defaults to `None`):
+            The quantizatizer dynamic range calibration configuration.
+    """
+
+    static: bool = field(init=False, default=True)
+    kernel_gptq: DiffusionGPTQConfig | None = field(init=False, default=None)
+    low_rank: SkipBasedQuantLowRankCalibConfig | None = field(init=False, default=None)
+    calib_range: SkipBasedDynamicRangeCalibConfig | None = field(init=False, default=None)
+
+    @property
+    def needs_calib_data(self) -> bool:
+        return self.enabled_calib_range and self.calib_range.needs_search
+
+
+@configclass
+@dataclass(kw_only=True)
 class DiffusionModuleQuantizerConfig(EnableConfig):
     """Diffusion model module quantizer configuration.
 
@@ -250,6 +311,7 @@ class DiffusionModuleQuantizerConfig(EnableConfig):
     wgts: DiffusionWeightQuantizerConfig
     ipts: DiffusionActivationQuantizerConfig
     opts: DiffusionActivationQuantizerConfig
+    extra_wgts: DiffusionExtraWeightQuantizerConfig | None = None
     unsigned_ipts: DiffusionActivationQuantizerConfig = field(init=False)
 
     def is_enabled(self):
@@ -270,9 +332,24 @@ class DiffusionModuleQuantizerConfig(EnableConfig):
         """Whether to enable activation quantization."""
         return self.opts is not None and self.opts.is_enabled()
 
+    @property
+    def enabled_extra_wgts(self) -> bool:
+        """Whether to enable extra weight quantization."""
+        return self.extra_wgts is not None and self.extra_wgts.is_enabled()
+
     def __post_init__(self) -> None:
         if self.enabled_opts:
             raise NotImplementedError("Output activation quantization is not supported yet.")
+        if self.wgts.is_enabled() and self.extra_wgts is not None:
+            self.extra_wgts.includes = list(filter(lambda key: key not in self.wgts.skips, self.extra_wgts.includes))
+            if self.extra_wgts.is_enabled():
+                self.extra_wgts.kernel_gptq = self.wgts.kernel_gptq
+                self.extra_wgts.low_rank = self.wgts.low_rank
+                self.extra_wgts.calib_range = self.wgts.calib_range
+            else:
+                self.extra_wgts = None
+        else:
+            self.extra_wgts = None
 
     def generate_dirnames(
         self,
@@ -307,6 +384,9 @@ class DiffusionModuleQuantizerConfig(EnableConfig):
             f"{wgts_name}-{ipts_name}-{opts_name}"
             for wgts_name, ipts_name, opts_name in zip(wgts_names, ipts_names, opts_names, strict=True)
         ]
+        if self.extra_wgts is not None:
+            extra_wgts_names = self.extra_wgts.generate_dirnames(prefix="w", shape=shape, default_dtype=default_dtype)
+            names = [f"{name}-{extra_wgts_name}" for name, extra_wgts_name in zip(names, extra_wgts_names, strict=True)]
         if prefix:
             names = [f"{prefix}.[{name}]" for name in names]
         return names

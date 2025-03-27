@@ -92,7 +92,10 @@ def calibrate_diffusion_block_low_rank_branch(  # noqa: C901
         else:
             assert all(isinstance(m, nn.Conv2d) for m in modules)
             channels_dim = 1
-        quantizer = DiffusionWeightQuantizer(config.wgts, develop_dtype=config.develop_dtype, key=module_key)
+        config_wgts = config.wgts
+        if config.enabled_extra_wgts and config.extra_wgts.is_enabled_for(module_key):
+            config_wgts = config.extra_wgts
+        quantizer = DiffusionWeightQuantizer(config_wgts, develop_dtype=config.develop_dtype, key=module_key)
         if quantizer.is_enabled() and quantizer.is_enabled_low_rank():
             if isinstance(module, nn.Conv2d):
                 assert module.weight.shape[2:].numel()
@@ -184,7 +187,10 @@ def update_diffusion_block_weight_quantizer_state_dict(
                 eval_module = wrap_joint_attn(eval_module, indexes=1)
         else:
             eval_module, eval_name, eval_kwargs = module, module_name, None
-        quantizer = DiffusionWeightQuantizer(config.wgts, develop_dtype=config.develop_dtype, key=module_key)
+        config_wgts = config.wgts
+        if config.enabled_extra_wgts and config.extra_wgts.is_enabled_for(module_key):
+            config_wgts = config.extra_wgts
+        quantizer = DiffusionWeightQuantizer(config_wgts, develop_dtype=config.develop_dtype, key=module_key)
         if quantizer.is_enabled():
             if module_name not in quantizer_state_dict:
                 logger.debug("- Calibrating %s.weight quantizer", module_name)
@@ -244,7 +250,13 @@ def quantize_diffusion_block_weights(
         if module_name in quantizer_state_dict:
             param_name = f"{module_name}.weight"
             logger.debug("- Quantizing %s", param_name)
-            quantizer = DiffusionWeightQuantizer(config.wgts, develop_dtype=config.develop_dtype, key=module_key)
+            config_wgts = config.wgts
+            if config.enabled_extra_wgts and config.extra_wgts.is_enabled_for(module_key):
+                config_wgts = config.extra_wgts
+            logger.debug("  + quant_dtype: %s", str(config_wgts.dtype))
+            logger.debug("  + group_shape: %s", str(config_wgts.group_shapes))
+            logger.debug("  + scale_dtype: %s", str(config_wgts.scale_dtypes))
+            quantizer = DiffusionWeightQuantizer(config_wgts, develop_dtype=config.develop_dtype, key=module_key)
             quantizer.load_state_dict(quantizer_state_dict[module_name], device=module.weight.device)
             result = quantizer.quantize(
                 module.weight.data,

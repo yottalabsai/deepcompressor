@@ -8,7 +8,7 @@ import safetensors.torch
 import torch
 import tqdm
 
-from ..utils import load_state_dict_in_safetensors
+from ..utils import load_state_dict_in_safetensors, pad
 from .convert import update_state_dict
 from .utils import NunchakuWeightPacker
 
@@ -117,8 +117,8 @@ def convert_to_nunchaku_transformer_block_lowrank_dict(  # noqa: C901
                 update_state_dict(
                     converted,
                     {
-                        "lora_down": lora[0],
-                        "lora_up": reorder_adanorm_lora_up(lora[1], splits=3),
+                        "lora_down": pad(lora[0], divisor=16, dim=0),
+                        "lora_up": pad(reorder_adanorm_lora_up(lora[1], splits=3), divisor=16, dim=1),
                     },
                     prefix=converted_local_name,
                 )
@@ -126,8 +126,8 @@ def convert_to_nunchaku_transformer_block_lowrank_dict(  # noqa: C901
                 update_state_dict(
                     converted,
                     {
-                        "lora_down": lora[0],
-                        "lora_up": reorder_adanorm_lora_up(lora[1], splits=6),
+                        "lora_down": pad(lora[0], divisor=16, dim=0),
+                        "lora_up": pad(reorder_adanorm_lora_up(lora[1], splits=6), divisor=16, dim=1),
                     },
                     prefix=converted_local_name,
                 )

@@ -63,12 +63,15 @@ def smooth_diffusion_qkv_proj(
                 prevs = attn.parent.pre_attn_norms[attn.idx]
                 assert isinstance(prevs, nn.LayerNorm)
         cache_key = attn.q_proj_name
+        config_wgts = config.wgts
+        if config.enabled_extra_wgts and config.extra_wgts.is_enabled_for(module_key):
+            config_wgts = config.extra_wgts
         smooth_cache[cache_key] = smooth_linear_modules(
             prevs,
             attn.qkv_proj,
             scale=smooth_cache.get(cache_key, None),
             config=config.smooth.proj,
-            weight_quantizer=Quantizer(config.wgts, key=module_key, low_rank=config.wgts.low_rank),
+            weight_quantizer=Quantizer(config_wgts, key=module_key, low_rank=config.wgts.low_rank),
             input_quantizer=Quantizer(config.ipts, channels_dim=-1, key=module_key),
             inputs=block_cache[attn.q_proj_name].inputs if block_cache else None,
             eval_inputs=block_cache[attn.name].inputs if block_cache else None,
@@ -103,12 +106,15 @@ def smooth_diffusion_qkv_proj(
         if isinstance(pre_attn_add_norm, nn.LayerNorm) and config.smooth.proj.fuse_when_possible:
             prevs = pre_attn_add_norm
         cache_key = attn.add_k_proj_name
+        config_wgts = config.wgts
+        if config.enabled_extra_wgts and config.extra_wgts.is_enabled_for(module_key):
+            config_wgts = config.extra_wgts
         smooth_cache[cache_key] = smooth_linear_modules(
             prevs,
             attn.add_qkv_proj,
             scale=smooth_cache.get(cache_key, None),
             config=config.smooth.proj,
-            weight_quantizer=Quantizer(config.wgts, key=module_key, low_rank=config.wgts.low_rank),
+            weight_quantizer=Quantizer(config_wgts, key=module_key, low_rank=config.wgts.low_rank),
             input_quantizer=Quantizer(config.ipts, channels_dim=-1, key=module_key),
             inputs=block_cache[attn.add_k_proj_name].inputs if block_cache else None,
             eval_inputs=block_cache[attn.name].inputs if block_cache else None,
@@ -126,7 +132,7 @@ def smooth_diffusion_qkv_proj(
 
 
 @torch.inference_mode()
-def smooth_diffusion_out_proj(
+def smooth_diffusion_out_proj(  # noqa: C901
     attn: DiffusionAttentionStruct,
     config: DiffusionQuantConfig,
     smooth_cache: dict[str, torch.Tensor],
@@ -152,12 +158,15 @@ def smooth_diffusion_out_proj(
         logger.debug("- %s.out_proj", attn.name)
         module_key = attn.out_proj_key
         cache_key = attn.o_proj_name
+        config_wgts = config.wgts
+        if config.enabled_extra_wgts and config.extra_wgts.is_enabled_for(module_key):
+            config_wgts = config.extra_wgts
         smooth_cache[cache_key] = smooth_linear_modules(
             prevs,
             attn.o_proj,
             scale=smooth_cache.get(cache_key, None),
             config=config.smooth.proj,
-            weight_quantizer=Quantizer(config.wgts, key=module_key, low_rank=config.wgts.low_rank),
+            weight_quantizer=Quantizer(config_wgts, key=module_key, low_rank=config.wgts.low_rank),
             input_quantizer=Quantizer(config.ipts, channels_dim=-1, key=module_key),
             inputs=block_cache[attn.o_proj_name].inputs if block_cache else None,
             eval_inputs=block_cache[attn.o_proj_name].inputs if block_cache else None,
@@ -170,12 +179,15 @@ def smooth_diffusion_out_proj(
         logger.debug("- %s.add_out_proj", attn.name)
         module_key = attn.add_out_proj_key
         cache_key = attn.add_o_proj_name
+        config_wgts = config.wgts
+        if config.enabled_extra_wgts and config.extra_wgts.is_enabled_for(module_key):
+            config_wgts = config.extra_wgts
         smooth_cache[cache_key] = smooth_linear_modules(
             prevs,
             attn.add_o_proj,
             scale=smooth_cache.get(cache_key, None),
             config=config.smooth.proj,
-            weight_quantizer=Quantizer(config.wgts, key=module_key, low_rank=config.wgts.low_rank),
+            weight_quantizer=Quantizer(config_wgts, key=module_key, low_rank=config.wgts.low_rank),
             input_quantizer=Quantizer(config.ipts, channels_dim=-1, key=module_key),
             inputs=block_cache[attn.add_o_proj_name].inputs if block_cache else None,
             eval_inputs=block_cache[attn.add_o_proj_name].inputs if block_cache else None,
@@ -188,12 +200,15 @@ def smooth_diffusion_out_proj(
         logger.debug("- %s.out_proj + %s.add_out_proj", attn.name, attn.name)
         module_key = attn.out_proj_key
         cache_key = attn.o_proj_name
+        config_wgts = config.wgts
+        if config.enabled_extra_wgts and config.extra_wgts.is_enabled_for(module_key):
+            config_wgts = config.extra_wgts
         smooth_cache[cache_key] = smooth_linear_modules(
             prevs,
             [attn.o_proj, attn.add_o_proj],
             scale=smooth_cache.get(cache_key, None),
             config=config.smooth.proj,
-            weight_quantizer=Quantizer(config.wgts, key=module_key, low_rank=config.wgts.low_rank),
+            weight_quantizer=Quantizer(config_wgts, key=module_key, low_rank=config.wgts.low_rank),
             input_quantizer=Quantizer(config.ipts, channels_dim=-1, key=module_key),
             inputs=block_cache[attn.o_proj_name].inputs if block_cache else None,
             eval_inputs=block_cache[attn.name].inputs if block_cache else None,
@@ -239,12 +254,15 @@ def smooth_diffusion_up_proj(
                 prevs = pre_ffn_norm
         cache_key = ffn.up_proj_name
         channels_dim = -1 if isinstance(ffn.down_proj, nn.Linear) else 1
+        config_wgts = config.wgts
+        if config.enabled_extra_wgts and config.extra_wgts.is_enabled_for(module_key):
+            config_wgts = config.extra_wgts
         smooth_cache[cache_key] = smooth_linear_modules(
             prevs,
             ffn.up_projs,
             scale=smooth_cache.get(cache_key, None),
             config=config.smooth.proj,
-            weight_quantizer=Quantizer(config.wgts, key=module_key, low_rank=config.wgts.low_rank),
+            weight_quantizer=Quantizer(config_wgts, key=module_key, low_rank=config.wgts.low_rank),
             input_quantizer=Quantizer(config.ipts, channels_dim=channels_dim, key=module_key),
             inputs=block_cache[ffn.up_proj_name].inputs if block_cache else None,
             eval_inputs=block_cache[ffn.up_proj_name].inputs if block_cache else None,
@@ -273,15 +291,17 @@ def smooth_diffusion_down_proj(
     if needs_quant and config.smooth.enabled_proj and config.smooth.proj.is_enabled_for(module_key):
         logger.debug("- %s.down_proj", ffn.name)
         cache_key = ffn.down_proj_name
-        unsigned_ipts = getattr(ffn.down_proj, "unsigned", False)
-        config_ipts = config.unsigned_ipts if unsigned_ipts else config.ipts
+        config_ipts = config.unsigned_ipts if getattr(ffn.down_proj, "unsigned", False) else config.ipts
+        config_wgts = config.wgts
+        if config.enabled_extra_wgts and config.extra_wgts.is_enabled_for(module_key):
+            config_wgts = config.extra_wgts
         channels_dim = -1 if isinstance(ffn.down_proj, nn.Linear) else 1
         smooth_cache[cache_key] = smooth_linear_modules(
             None,
             ffn.down_proj,
             scale=smooth_cache.get(cache_key, None),
             config=config.smooth.proj,
-            weight_quantizer=Quantizer(config.wgts, key=module_key, low_rank=config.wgts.low_rank),
+            weight_quantizer=Quantizer(config_wgts, key=module_key, low_rank=config.wgts.low_rank),
             input_quantizer=Quantizer(config_ipts, channels_dim=channels_dim, key=module_key),
             inputs=block_cache[ffn.down_proj_name].inputs if block_cache else None,
             eval_inputs=block_cache[ffn.down_proj_name].inputs if block_cache else None,
@@ -313,12 +333,15 @@ def smooth_diffusion_parallel_qkv_up_proj(
         logger.debug("- %s.qkv_proj + %s.up_proj", attn.name, ffn.name)
         cache_key = attn.q_proj_name
         modules = attn.qkv_proj + ffn.up_projs
+        config_wgts = config.wgts
+        if config.enabled_extra_wgts and config.extra_wgts.is_enabled_for(module_key):
+            config_wgts = config.extra_wgts
         smooth_cache[cache_key] = smooth_linear_modules(
             None,
             modules,
             scale=smooth_cache.get(cache_key, None),
             config=config.smooth.proj,
-            weight_quantizer=Quantizer(config.wgts, key=module_key, low_rank=config.wgts.low_rank),
+            weight_quantizer=Quantizer(config_wgts, key=module_key, low_rank=config.wgts.low_rank),
             input_quantizer=Quantizer(config.ipts, channels_dim=-1, key=module_key),
             inputs=block_cache[attn.q_proj_name].inputs if block_cache else None,
             eval_inputs=block_cache[block.name].inputs if block_cache else None,
@@ -354,12 +377,15 @@ def smooth_diffusion_parallel_qkv_up_proj(
         else:
             logger.debug("- %s.add_qkv_proj + %s.up_proj", attn.name, add_ffn.name)
             modules = modules + add_ffn.up_projs
+        config_wgts = config.wgts
+        if config.enabled_extra_wgts and config.extra_wgts.is_enabled_for(module_key):
+            config_wgts = config.extra_wgts
         smooth_cache[cache_key] = smooth_linear_modules(
             None,
             modules,
             scale=smooth_cache.get(cache_key, None),
             config=config.smooth.proj,
-            weight_quantizer=Quantizer(config.wgts, key=module_key, low_rank=config.wgts.low_rank),
+            weight_quantizer=Quantizer(config_wgts, key=module_key, low_rank=config.wgts.low_rank),
             input_quantizer=Quantizer(config.ipts, channels_dim=-1, key=module_key),
             inputs=block_cache[attn.add_k_proj_name].inputs if block_cache else None,
             eval_inputs=block_cache[block.name].inputs if block_cache else None,
@@ -476,12 +502,15 @@ def smooth_diffusion_module(
         logger.debug("- %s", module_name)
         cache_key = module_name
         channels_dim = -1 if isinstance(module, nn.Linear) else 1
+        config_wgts = config.wgts
+        if config.enabled_extra_wgts and config.extra_wgts.is_enabled_for(module_key):
+            config_wgts = config.extra_wgts
         smooth_cache[cache_key] = smooth_linear_modules(
             None,
             module,
             scale=smooth_cache.get(cache_key, None),
             config=config.smooth.proj,
-            weight_quantizer=Quantizer(config.wgts, key=module_key),
+            weight_quantizer=Quantizer(config_wgts, key=module_key),
             input_quantizer=Quantizer(config.ipts, channels_dim=channels_dim, key=module_key),
             inputs=layer_cache[module_name].inputs if layer_cache else None,
             eval_inputs=layer_cache[module_name].inputs if layer_cache else None,

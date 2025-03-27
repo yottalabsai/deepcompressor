@@ -86,6 +86,7 @@ python -m deepcompressor.backend.nunchaku.convert_lora \
   --output-root /PATH/TO/OUTPUT/ROOT \
   --lora-name LORA_NAME
 ```
+WARNING: current LoRA conversion script only supports `deepcompressor` v0.0.1 checkpoints generated with [`fuse_when_possible` set to `False`](https://github.com/mit-han-lab/deepcompressor/blob/main/examples/diffusion/configs/svdquant/__default__.yaml#L16) (i.e., `--smooth-fuse-when-possible false`).
 
 ## Evaluation Resutls
 
@@ -101,18 +102,18 @@ Below is the quality and similarity evaluated with 5000 samples from MJHQ-30K da
 |                            | INT W4A4  |           | 20.2               | 0.908           | 0.322                | 18.5              |
 |                            | INT W4A4  | SVDQ      | 20.1               | 0.926           | 0.256                | 20.1              |
 |                            | INT W4A4  | SVDQ+GPTQ | 19.9               | 0.935           | 0.223                | 21.0              |
-|                            | NVFP4     |           | 20.3               | 0.961           | 0.345                | 16.3              |
-|                            | NVFP4     | SVDQ      | 20.7               | 0.934           | 0.222                | 21.0              |
-|                            | NVFP4     | SVDQ+GPTQ | 20.3               | 0.942           | 0.205                | 21.5              |
+|                            | NVFP4     |           | 20.3               | 0.926           | 0.242                | 20.4              |
+|                            | NVFP4     | SVDQ      | 20.3               | 0.944           | 0.224                | 20.8              |
+|                            | NVFP4     | SVDQ+GPTQ | 20.3               | 0.945           | 0.203                | 21.5              |
 | FLUX.1-schnell (4 Steps)   | BF16      | --        | 19.2               | 0.938           | --                   | --                |
 |                            | INT W8A8  | SVDQ      | 19.2               | 0.966           | 0.120                | 22.9              |
 |                            | W4A16     | NF4       | 18.9               | 0.943           | 0.257                | 18.2              |
 |                            | INT W4A4  |           | 18.1               | 0.962           | 0.345                | 16.3              |
 |                            | INT W4A4  | SVDQ      | 18.3               | 0.957           | 0.289                | 17.6              |
 |                            | INT W4A4  | SVDQ+GPTQ | 18.3               | 0.951           | 0.257                | 18.3              |
-|                            | NVFP4     |           | 19.0               | 0.952           | 0.276                | 17.6              |
-|                            | NVFP4     | SVDQ      | 19.0               | 0.976           | 0.247                | 18.4              |
-|                            | NVFP4     | SVDQ+GPTQ | 18.9               | 0.964           | 0.229                | 19.0              |
+|                            | NVFP4     |           | 17.6               | 0.956           | 0.277                | 17.6              |
+|                            | NVFP4     | SVDQ      | 18.7               | 0.979           | 0.247                | 18.4              |
+|                            | NVFP4     | SVDQ+GPTQ | 18.9               | 0.966           | 0.228                | 19.0              |
 | SANA-1.6b (20 Steps)       | BF16      | --        | 20.6               | 0.952           | --                   | --                |
 |                            | INT W4A4  |           | 20.5               | 0.894           | 0.339                | 15.3              |
 |                            | INT W4A4  | GPTQ      | 19.9               | 0.881           | 0.288                | 16.4              |
@@ -129,7 +130,7 @@ Below is the quality and similarity evaluated with 5000 samples from MJHQ-30K da
 |                            | INT W4A4  | SVDQ      | 19.9               | 0.858           | 0.356                | 17.0              |
 |                            | INT W4A4  | SVDQ+GPTQ | 19.2               | 0.878           | 0.323                | 17.6              |
 |                            | NVFP4     |           | 31.8               | 0.660           | 0.517                | 14.8              |
-|                            | NVFP4     | GPTQ      | 27.2               | 0.691           | 0.482                 | 15.6              |
+|                            | NVFP4     | GPTQ      | 27.2               | 0.691           | 0.482                | 15.6              |
 |                            | NVFP4     | SVDQ      | 17.3               | 0.945           | 0.290                | 18.0              |
 |                            | NVFP4     | SVDQ+GPTQ | 16.6               | 0.940           | 0.271                | 18.5              |
 

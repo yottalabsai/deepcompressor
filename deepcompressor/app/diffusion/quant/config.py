@@ -26,7 +26,7 @@ __all__ = ["DiffusionQuantConfig"]
 
 
 @configclass
-@dataclass
+@dataclass(kw_only=True)
 class DiffusionQuantConfig(DiffusionModuleQuantizerConfig):
     """Diffusion model quantization configuration.
 
@@ -218,6 +218,9 @@ class DiffusionQuantConfig(DiffusionModuleQuantizerConfig):
             if "w" in skip_name_map:
                 skip_name += f".w.[{'+'.join(sorted(skip_name_map['w']))}]"
             del skip_name_list, skip_name_map
+        extra_name = ""
+        if self.enabled_extra_wgts:
+            extra_name = "-extra.[{}]".format("+".join(sorted(simplify_skips(self.extra_wgts.includes))))
         lowrank_name = ""
         if self.enabled_wgts and self.wgts.enabled_low_rank:
             lowrank_name = f"-low.r{num2str(self.wgts.low_rank.rank)}"
@@ -394,7 +397,15 @@ class DiffusionQuantConfig(DiffusionModuleQuantizerConfig):
                     yrange_skips.add("[y]")
                 yrange_name += ".skip.[{}]".format("+".join(sorted(yrange_skips)))
         name = (
-            skip_name + lowrank_name + rotation_name + smooth_name + gptq_name + wrange_name + xrange_name + yrange_name
+            skip_name
+            + extra_name
+            + lowrank_name
+            + rotation_name
+            + smooth_name
+            + gptq_name
+            + wrange_name
+            + xrange_name
+            + yrange_name
         )
         name = name[1:] if name else "default"
         name += f"-{self.calib.generate_dirnames()[0]}"
@@ -438,6 +449,14 @@ class DiffusionQuantConfig(DiffusionModuleQuantizerConfig):
                 for skip in self.wgts.calib_range.skips:
                     wgts_calib_range_skips.extend(list(key_map[skip]))
                 self.wgts.calib_range.skips = sorted(set(wgts_calib_range_skips) - wgts_skip_set)
+            if self.extra_wgts is not None:
+                extra_includes = []
+                for include in self.extra_wgts.includes:
+                    extra_includes.extend(list(key_map[include]))
+                extra_includes_set = set(extra_includes) - wgts_skip_set
+                self.extra_wgts.includes = sorted(extra_includes_set)
+                if not self.extra_wgts.is_enabled():
+                    self.extra_wgts = None
         if self.ipts is not None:
             ipts_skips = []
             for skip in self.ipts.skips:

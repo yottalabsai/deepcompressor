@@ -1,7 +1,6 @@
 import os
 
 import datasets
-import ImageReward as RM
 import torch
 from tqdm import tqdm
 
@@ -12,6 +11,9 @@ def compute_image_reward(
     ref_dataset: datasets.Dataset,
     gen_dirpath: str,
 ) -> dict[str, float]:
+    # import here to remove dependency on `ImageReward` git repo
+    import ImageReward as RM
+
     scores = []
     model = RM.load("ImageReward-v1.0")
     for batch in tqdm(

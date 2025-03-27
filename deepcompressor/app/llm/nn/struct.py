@@ -11,56 +11,46 @@ from transformers.models.gemma2.modeling_gemma2 import (
     Gemma2Attention,
     Gemma2Config,
     Gemma2DecoderLayer,
-    Gemma2FlashAttention2,
     Gemma2ForCausalLM,
     Gemma2ForSequenceClassification,
     Gemma2MLP,
     Gemma2Model,
-    Gemma2SdpaAttention,
 )
 from transformers.models.llama.modeling_llama import (
     LlamaAttention,
     LlamaConfig,
     LlamaDecoderLayer,
-    LlamaFlashAttention2,
     LlamaForCausalLM,
     LlamaForSequenceClassification,
     LlamaMLP,
     LlamaModel,
-    LlamaSdpaAttention,
 )
 from transformers.models.mistral.modeling_mistral import (
     MistralAttention,
     MistralConfig,
     MistralDecoderLayer,
-    MistralFlashAttention2,
     MistralForCausalLM,
     MistralForSequenceClassification,
     MistralMLP,
     MistralModel,
-    MistralSdpaAttention,
 )
 from transformers.models.mixtral.modeling_mixtral import (
     MixtralAttention,
     MixtralConfig,
     MixtralDecoderLayer,
-    MixtralFlashAttention2,
     MixtralForCausalLM,
     MixtralForSequenceClassification,
     MixtralModel,
-    MixtralSdpaAttention,
     MixtralSparseMoeBlock,
 )
 from transformers.models.qwen2.modeling_qwen2 import (
     Qwen2Attention,
     Qwen2Config,
     Qwen2DecoderLayer,
-    Qwen2FlashAttention2,
     Qwen2ForCausalLM,
     Qwen2ForSequenceClassification,
     Qwen2MLP,
     Qwen2Model,
-    Qwen2SdpaAttention,
 )
 from transformers.models.t5.modeling_t5 import (
     T5Attention,
@@ -101,22 +91,7 @@ __all__ = [
 
 # region type aliases
 ATTENTION_CLS = tp.Union[
-    LlamaAttention,
-    MistralAttention,
-    MixtralAttention,
-    Qwen2Attention,
-    T5Attention,
-    LlamaFlashAttention2,
-    MistralFlashAttention2,
-    MixtralFlashAttention2,
-    Qwen2FlashAttention2,
-    LlamaSdpaAttention,
-    MistralSdpaAttention,
-    MixtralSdpaAttention,
-    Qwen2SdpaAttention,
-    Gemma2Attention,
-    Gemma2FlashAttention2,
-    Gemma2SdpaAttention,
+    LlamaAttention, MistralAttention, MixtralAttention, Qwen2Attention, T5Attention, Gemma2Attention
 ]
 FEEDFORWARD_CLS = tp.Union[
     LlamaMLP, MistralMLP, MixtralSparseMoeBlock, Qwen2MLP, T5DenseActDense, T5DenseGatedActDense, Gemma2MLP
@@ -300,7 +275,9 @@ class LlmSelfAttentionStruct(SelfAttentionStruct):
                 "output_attentions",
             )
         elif isinstance(module, (LlamaAttention, MistralAttention, MixtralAttention, Qwen2Attention, Gemma2Attention)):
-            with_rope, num_query_heads, num_key_value_heads = True, module.num_heads, module.num_key_value_heads
+            with_rope = True
+            num_query_heads = module.config.num_attention_heads
+            num_key_value_heads = module.config.num_key_value_heads
             q_proj, k_proj, v_proj, o_proj = module.q_proj, module.k_proj, module.v_proj, module.o_proj
             q_proj_rname, k_proj_rname, v_proj_rname, o_proj_rname = "q_proj", "k_proj", "v_proj", "o_proj"
             if hasattr(module, "q_rotary_emb"):
@@ -318,10 +295,9 @@ class LlmSelfAttentionStruct(SelfAttentionStruct):
                 "past_key_value",
                 "output_attentions",
                 "use_cache",
+                "position_embeddings",
                 "cache_position",
             )
-            if not isinstance(module, LlamaAttention):
-                kwargs = kwargs[:-1]
         else:
             raise ValueError(f"Unsupported attention type: {type(module)}")
         config = AttentionConfigStruct(

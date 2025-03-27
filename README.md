@@ -79,25 +79,25 @@ Below is the quality and similarity evaluated with 5000 samples from MJHQ-30K da
 | FLUX.1-dev (50 Steps)      | BF16      | --        | 20.3               | 0.953           | --                   | --                |
 |                            | W4A16     | NF4       | 20.6               | 0.910           | 0.272                | 19.5              |
 |                            | INT W4A4  |           | 20.2               | 0.908           | 0.322                | 18.5              |
-|                            | INT W4A4  | Ours      | 19.9               | 0.935           | 0.223                | 21.0              |
+|                            | INT W4A4  | SVDQuant  | 19.9               | 0.935           | 0.223                | 21.0              |
 |                            | NVFP4     |           | 20.3               | 0.961           | 0.345                | 16.3              |
-|                            | NVFP4     | Ours      | 20.3               | 0.942           | 0.205                | 21.5              |
+|                            | NVFP4     | SVDQuant  | 20.3               | 0.945           | 0.205                | 21.5              |
 | FLUX.1-schnell (4 Steps)   | BF16      | --        | 19.2               | 0.938           | --                   | --                |
 |                            | W4A16     | NF4       | 18.9               | 0.943           | 0.257                | 18.2              |
 |                            | INT W4A4  |           | 18.1               | 0.962           | 0.345                | 16.3              |
-|                            | INT W4A4  | Ours      | 18.3               | 0.951           | 0.257                | 18.3              |
+|                            | INT W4A4  | SVDQuant  | 18.3               | 0.951           | 0.257                | 18.3              |
 |                            | NVFP4     |           | 19.0               | 0.952           | 0.276                | 17.6              |
-|                            | NVFP4     | Ours      | 18.9               | 0.964           | 0.229                | 19.0              |
+|                            | NVFP4     | SVDQuant  | 18.9               | 0.966           | 0.228                | 19.0              |
 | SANA-1.6b (20 Steps)       | BF16      | --        | 20.6               | 0.952           | --                   | --                |
 |                            | INT W4A4  |           | 20.5               | 0.894           | 0.339                | 15.3              |
-|                            | INT W4A4  | Ours      | 19.3               | 0.935           | 0.220                | 17.8              |
+|                            | INT W4A4  | SVDQuant  | 19.3               | 0.935           | 0.220                | 17.8              |
 |                            | NVFP4     |           | 19.7               | 0.929           | 0.236                | 17.4              |
-|                            | NVFP4     | Ours      | 20.2               | 0.941           | 0.176                | 19.0              |
+|                            | NVFP4     | SVDQuant  | 20.2               | 0.941           | 0.176                | 19.0              |
 | PixArt-Sigma (20 Steps)    | FP16      | --        | 16.6               | 0.944           | --                   | --                |
 |                            | INT W4A8  | ViDiT-Q   | 37.3               | 0.573           | 0.611                | 12.0              |
-|                            | INT W4A4  | Ours      | 19.2               | 0.878           | 0.323                | 17.6              |
+|                            | INT W4A4  | SVDQuant  | 19.2               | 0.878           | 0.323                | 17.6              |
 |                            | NVFP4     |           | 31.8               | 0.660           | 0.517                | 14.8              |
-|                            | NVFP4     | Ours      | 16.6               | 0.940           | 0.271                | 18.5              |
+|                            | NVFP4     | SVDQuant  | 16.6               | 0.940           | 0.271                | 18.5              |
 
 ### QServe: W4A8KV4 Quantization for Efficient LLM Serving
 
