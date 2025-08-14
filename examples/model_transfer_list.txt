@@ -1,0 +1,26 @@
+# Hugging Face 到 ModelScope 模型迁移列表
+# 格式: huggingface_model_name modelscope_model_name
+# 
+# 示例模型列表（请根据实际需要修改）
+
+# 对话模型
+microsoft/DialoGPT-small your-org/DialoGPT-small
+microsoft/DialoGPT-medium your-org/DialoGPT-medium
+
+# 代码模型
+microsoft/CodeBERT-base your-org/CodeBERT-base
+Salesforce/codet5-small your-org/codet5-small
+
+# 嵌入模型
+sentence-transformers/all-MiniLM-L6-v2 your-org/all-MiniLM-L6-v2
+sentence-transformers/all-mpnet-base-v2 your-org/all-mpnet-base-v2
+
+# 视觉模型
+google/vit-base-patch16-224 your-org/vit-base-patch16-224
+facebook/deit-tiny-patch16-224 your-org/deit-tiny-patch16-224
+
+# 注意：
+# 1. 请将 "your-org" 替换为您在ModelScope上的实际组织名或用户名
+# 2. 确保您有权限在ModelScope上创建仓库
+# 3. 大模型迁移可能需要较长时间，建议先测试小模型
+# 4. 私有模型需要相应的访问token

@@ -10,6 +10,7 @@ from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer, PreTra
 
 from deepcompressor.data.utils.dtype import eval_dtype
 from deepcompressor.utils.config.model import BaseModelConfig
+from deepcompressor.utils.modelscope import ModelScopeLoader, is_modelscope_model
 
 from ..nn.patch import patch_attention, patch_gemma_rms_norm
 
@@ -89,7 +90,20 @@ class LlmModelConfig(BaseModelConfig):
         self.name = self.name.lower()
         self.family = self.family.lower()
         self.variant = self.variant.lower()
-        config = AutoConfig.from_pretrained(self.path)
+        
+        # 如果使用ModelScope，先检查是否需要下载模型
+        if self.use_modelscope and is_modelscope_model(self.path):
+            try:
+                from modelscope import AutoConfig as MSAutoConfig
+                config = MSAutoConfig.from_pretrained(self.path, cache_dir=self.modelscope_cache_dir)
+            except ImportError:
+                raise ImportError(
+                    "ModelScope library is required when use_modelscope=True. "
+                    "Please install it with: pip install modelscope"
+                )
+        else:
+            config = AutoConfig.from_pretrained(self.path)
+        
         self.orig_dtype = config.torch_dtype
         if self.orig_dtype == torch.float32:
             self.dtype = self.dtype or torch.float16
@@ -119,6 +133,18 @@ class LlmModelConfig(BaseModelConfig):
         kwargs = {"torch_dtype": torch_dtype}
         if torch.cuda.is_available() and torch.cuda.device_count() > 0:
             kwargs["device_map"] = "balanced"
+        
+        # 如果使用ModelScope，调用ModelScope的加载方法
+        if self.use_modelscope and is_modelscope_model(self.path):
+            return ModelScopeLoader.load_llm_model(
+                self.path,
+                cache_dir=self.modelscope_cache_dir,
+                torch_dtype=torch_dtype,
+                device_map=kwargs.get("device_map"),
+                use_fast=self.fast_tokenizer,
+                **kwargs
+            )
+        
         return self._default_build(self.path, **kwargs)
 
     @staticmethod

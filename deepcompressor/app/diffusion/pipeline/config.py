@@ -21,6 +21,7 @@ from deepcompressor.data.utils.dtype import eval_dtype
 from deepcompressor.quantizer.processor import Quantizer
 from deepcompressor.utils import tools
 from deepcompressor.utils.hooks import AccumBranchHook, ProcessHook
+from deepcompressor.utils.modelscope import ModelScopeLoader, is_modelscope_model
 
 from ....nn.patch.linear import ConcatLinear, ShiftedLinear
 from ....nn.patch.lowrank import LowRankBranch
@@ -66,6 +67,10 @@ class DiffusionPipelineConfig:
             The device of the pipeline.
         shift_activations (`bool`, *optional*, defaults to `False`):
             Whether to shift activations.
+        use_modelscope (`bool`, *optional*, defaults to `False`):
+            Whether to use ModelScope for model loading.
+        modelscope_cache_dir (`str`, *optional*, defaults to `""`):
+            Cache directory for ModelScope models.
     """
 
     _pipeline_factories: tp.ClassVar[
@@ -88,12 +93,20 @@ class DiffusionPipelineConfig:
     )
     device: str = "cuda"
     shift_activations: bool = False
+    use_modelscope: bool = False
+    modelscope_cache_dir: str = ""
     lora: LoRAConfig | None = None
     family: str = field(init=False)
     task: str = "text-to-image"
 
     def __post_init__(self):
         self.family = self.name.split("-")[0]
+
+        # 如果启用ModelScope或路径看起来像ModelScope模型ID，则使用ModelScope
+        if not self.path:
+            if self.use_modelscope or is_modelscope_model(self.name):
+                self.path = self.name  # 使用模型名作为ModelScope模型ID
+                self.use_modelscope = True
 
         if self.name == "flux.1-canny-dev":
             self.task = "canny-to-image"
@@ -122,6 +135,18 @@ class DiffusionPipelineConfig:
         if device is None:
             device = self.device
         _factory = self._pipeline_factories.get(self.name, self._default_build)
+        
+        # 如果使用ModelScope，需要传递额外参数
+        if self.use_modelscope and is_modelscope_model(self.path):
+            return self._default_build_with_modelscope(
+                name=self.name, 
+                path=self.path, 
+                dtype=dtype, 
+                device=device, 
+                shift_activations=self.shift_activations,
+                cache_dir=self.modelscope_cache_dir
+            )
+        
         return _factory(
             name=self.name, path=self.path, dtype=dtype, device=device, shift_activations=self.shift_activations
         )
@@ -322,6 +347,59 @@ class DiffusionPipelineConfig:
                 if isinstance(hook, AccumBranchHook) and isinstance(hook.branch, LowRankBranch):
                     branches.append(hook.branch)
         model.register_module("_low_rank_branches", branches)
+
+    @staticmethod
+    def _default_build_with_modelscope(
+        name: str, 
+        path: str, 
+        dtype: str | torch.dtype, 
+        device: str | torch.device, 
+        shift_activations: bool,
+        cache_dir: str = ""
+    ) -> DiffusionPipeline:
+        """Build diffusion pipeline from ModelScope.
+        
+        Args:
+            name: Pipeline name
+            path: ModelScope model ID
+            dtype: Data type
+            device: Device
+            shift_activations: Whether to shift activations
+            cache_dir: ModelScope cache directory
+            
+        Returns:
+            DiffusionPipeline: The built pipeline
+        """
+        # 根据pipeline名字选择对应的pipeline类
+        if name in ["flux.1-canny-dev", "flux.1-depth-dev"]:
+            pipeline_class = FluxControlPipeline
+        elif name == "flux.1-fill-dev":
+            pipeline_class = FluxFillPipeline
+        elif name.startswith("sana-"):
+            pipeline_class = SanaPipeline
+        else:
+            pipeline_class = AutoPipelineForText2Image
+        
+        # 使用ModelScope加载器
+        if name.startswith("sana-") and dtype == torch.bfloat16:
+            pipeline = ModelScopeLoader.load_diffusion_pipeline(
+                path, pipeline_class, cache_dir=cache_dir, 
+                variant="bf16", torch_dtype=dtype, use_safetensors=True
+            )
+            pipeline.vae.to(dtype)
+            pipeline.text_encoder.to(dtype)
+        else:
+            pipeline = ModelScopeLoader.load_diffusion_pipeline(
+                path, pipeline_class, cache_dir=cache_dir, torch_dtype=dtype
+            )
+        
+        pipeline = pipeline.to(device)
+        model = pipeline.unet if hasattr(pipeline, "unet") else pipeline.transformer
+        replace_fused_linear_with_concat_linear(model)
+        replace_up_block_conv_with_concat_conv(model)
+        if shift_activations:
+            shift_input_activations(model)
+        return pipeline
 
     @staticmethod
     def _default_build(

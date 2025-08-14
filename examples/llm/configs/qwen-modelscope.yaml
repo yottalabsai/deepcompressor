@@ -1,0 +1,49 @@
+model:
+  name: qwen-7b-chat
+  use_modelscope: true
+  # ModelScope模型ID，例如：qwen/Qwen-7B-Chat
+  path: "qwen/Qwen-7B-Chat"  # 这里使用示例路径，实际使用时需要替换为真实的ModelScope模型ID
+  # modelscope_cache_dir: "~/.cache/modelscope"  # 可选：指定ModelScope缓存目录
+  dtype: torch.float16
+  fast_tokenizer: true
+
+quant:
+  wgts:
+    calib_range:
+      element_batch_size: 64
+      sample_batch_size: 16
+      element_size: 512
+      sample_size: -1
+    low_rank:
+      sample_batch_size: 16
+      sample_size: -1
+    kernel:
+      name: rtn
+    config:
+      kernel:
+        bit: 8
+    skips: 
+    - embed_tokens
+    - lm_head
+  ipts:
+    calib_range:
+      element_batch_size: 64
+      sample_batch_size: 16
+      element_size: 512
+      sample_size: -1
+    kernel:
+      name: rtn
+    config:
+      kernel:
+        bit: 8
+    skips:
+    - embed_tokens
+    - norm
+    - rotary_emb
+
+eval:
+  tasks:
+  - name: mmlu
+    num_samples: 100
+  - name: hellaswag  
+    num_samples: 100

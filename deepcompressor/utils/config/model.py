@@ -8,6 +8,8 @@ from dataclasses import dataclass
 
 from omniconfig import configclass
 
+from ..modelscope import is_modelscope_model
+
 __all__ = ["BaseModelConfig"]
 
 
@@ -29,6 +31,10 @@ class BaseModelConfig(ABC):
             Local path of the model.
         local_root (`str`, *optional*, defaults to `""`):
             Local root directory path for models.
+        use_modelscope (`bool`, *optional*, defaults to `False`):
+            Whether to use ModelScope for model loading.
+        modelscope_cache_dir (`str`, *optional*, defaults to `""`):
+            Cache directory for ModelScope models.
     """
 
     name: str
@@ -37,6 +43,8 @@ class BaseModelConfig(ABC):
     root: str = ""
     local_path: str = ""
     local_root: str = ""
+    use_modelscope: bool = False
+    modelscope_cache_dir: str = ""
 
     def __post_init__(self):
         if not self.family:
@@ -45,7 +53,12 @@ class BaseModelConfig(ABC):
         if not self.local_path:
             self.local_path = os.path.join(self.local_root, self.family, self.name)
         if not self.path:
-            self.path = os.path.join(self.root, self.family, self.name)
+            # 如果启用ModelScope或路径看起来像ModelScope模型ID，则使用ModelScope
+            if self.use_modelscope or is_modelscope_model(self.name):
+                self.path = self.name  # 使用模型名作为ModelScope模型ID
+                self.use_modelscope = True
+            else:
+                self.path = os.path.join(self.root, self.family, self.name)
         if os.path.exists(self.local_path):
             self.path = self.local_path
 
