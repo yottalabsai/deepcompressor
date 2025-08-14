@@ -47,7 +47,7 @@ xformers = ">= 0.0.26"
 av = ">= 13.0.0"
 clip = ">= 0.2.0"
 image_reward = { git = "https://github.com/THUDM/ImageReward.git", branch = "main" }
-modelscope = { version = ">= 1.20.0", optional = true }
+modelscope = ">= 1.20.0"
 
 [tool.poetry.group.dev.dependencies]
 matplotlib = ">= 3.8.4"
