@@ -43,16 +43,18 @@ class ModelTransfer:
         self.temp_dir: Optional[str] = None
         
     def __enter__(self):
-        """创建临时目录"""
-        self.temp_dir = tempfile.mkdtemp(prefix="model_transfer_")
-        self.logger.info(f"创建临时目录: {self.temp_dir}")
+        """创建持久缓存目录"""
+        cache_root = os.path.expanduser("~/.cache/model_transfer")
+        os.makedirs(cache_root, exist_ok=True)
+        self.temp_dir = cache_root
+        self.logger.info(f"使用缓存目录: {self.temp_dir}")
         return self
         
     def __exit__(self, exc_type, exc_val, exc_tb):
-        """清理临时目录"""
-        if self.temp_dir and os.path.exists(self.temp_dir):
-            shutil.rmtree(self.temp_dir)
-            self.logger.info(f"清理临时目录: {self.temp_dir}")
+        """保留缓存目录以供下次使用"""
+        if self.temp_dir:
+            self.logger.info(f"模型已缓存到: {self.temp_dir}")
+            self.logger.info("💡 下次运行相同模型将跳过下载")
     
     def check_dependencies(self):
         """检查依赖库"""
@@ -114,10 +116,49 @@ class ModelTransfer:
         except ImportError:
             self.logger.error("❌ ModelScope库未安装")
     
+    def check_model_exists(self, local_path: str, model_name: str) -> bool:
+        """检查模型是否已存在且完整"""
+        if not os.path.exists(local_path):
+            return False
+        
+        from pathlib import Path
+        path_obj = Path(local_path)
+        
+        # 检查是否为空目录
+        if not any(path_obj.iterdir()):
+            return False
+        
+        # 检查基本文件
+        basic_files = ["README.md", "config.json", "model_index.json"]
+        found_basic = any((path_obj / f).exists() for f in basic_files)
+        
+        if not found_basic:
+            self.logger.debug(f"未找到基本配置文件")
+            return False
+        
+        # 检查模型文件
+        model_files = list(path_obj.rglob("*.safetensors")) + list(path_obj.rglob("*.bin"))
+        
+        if len(model_files) == 0:
+            self.logger.debug(f"未找到模型权重文件")
+            return False
+        
+        # 计算总大小
+        total_size = sum(f.stat().st_size for f in path_obj.rglob("*") if f.is_file())
+        size_mb = total_size / (1024 * 1024)
+        
+        self.logger.info(f"✅ 发现已存在的模型: {size_mb:.2f} MB，{len(model_files)} 个权重文件")
+        return True
+
     def download_from_hf(self, hf_model_name: str, local_path: str, token: Optional[str] = None) -> bool:
         """从Hugging Face下载模型"""
         try:
             from huggingface_hub import snapshot_download
+            
+            # 检查模型是否已存在
+            if self.check_model_exists(local_path, hf_model_name):
+                self.logger.info(f"模型已存在，跳过下载: {local_path}")
+                return True
             
             self.logger.info(f"开始从Hugging Face下载模型: {hf_model_name}")
             
@@ -260,7 +301,9 @@ class ModelTransfer:
         if not self.temp_dir:
             raise RuntimeError("请在with语句中使用此方法")
         
-        local_path = os.path.join(self.temp_dir, "model")
+        # 使用模型名称创建更具体的缓存路径
+        safe_model_name = hf_model_name.replace("/", "_").replace("-", "_")
+        local_path = os.path.join(self.temp_dir, safe_model_name)
         
         # 1. 下载模型
         self.logger.info(f"🚀 开始迁移: {hf_model_name} -> {ms_model_name}")

@@ -1,79 +1,46 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-FLUX.1-dev 模型迁移脚本
-从 Hugging Face 迁移到 ModelScope
+修复版FLUX.1-dev迁移脚本
+自动处理依赖安装
 """
 
 import os
 import sys
 import tempfile
 import shutil
+import subprocess
 from pathlib import Path
 
-# ModelScope token需要通过环境变量或命令行登录设置
-# 使用方法：export MODELSCOPE_API_TOKEN="your_token" 或 python -m modelscope.cli.cli login --token "your_token"
-
-def check_model_exists(local_path):
-    """检查模型是否已存在且完整"""
-    if not os.path.exists(local_path):
-        return False
+def ensure_dependencies():
+    """确保所有依赖都已安装"""
+    dependencies = ['transformers', 'huggingface_hub', 'modelscope', 'gitpython']
     
-    path_obj = Path(local_path)
-    
-    # 检查关键文件
-    required_files = [
-        "model_index.json",
-        "README.md"
-    ]
-    
-    for file in required_files:
-        if not (path_obj / file).exists():
-            print(f"  ❌ 缺少文件: {file}")
-            return False
-    
-    # 检查模型文件
-    model_files = list(path_obj.rglob("*.safetensors")) + list(path_obj.rglob("*.bin"))
-    if len(model_files) < 5:  # 至少应该有几个模型文件
-        print(f"  ❌ 模型文件不完整，只有 {len(model_files)} 个文件")
-        return False
-    
-    # 计算总大小
-    total_size = sum(f.stat().st_size for f in path_obj.rglob("*") if f.is_file())
-    size_gb = total_size / (1024**3)
-    
-    if size_gb < 20:  # FLUX.1-dev 应该至少有20GB
-        print(f"  ❌ 模型大小不足: {size_gb:.2f} GB < 20 GB")
-        return False
-    
-    print(f"  ✅ 模型已存在且完整: {size_gb:.2f} GB")
-    return True
+    for dep in dependencies:
+        try:
+            if dep == 'gitpython':
+                import git
+            else:
+                __import__(dep)
+        except ImportError:
+            print(f"📦 安装缺失的依赖: {dep}")
+            subprocess.check_call([sys.executable, "-m", "pip", "install", dep])
 
 def download_flux_from_hf():
     """从Hugging Face下载FLUX.1-dev模型"""
     try:
         from huggingface_hub import snapshot_download
         
-        # 使用固定的缓存目录
-        cache_dir = os.path.expanduser("~/flux_model_cache")
-        local_path = os.path.join(cache_dir, "flux-dev")
-        
-        print("🔍 检查模型是否已存在...")
-        print(f"📁 检查目录: {local_path}")
-        
-        if check_model_exists(local_path):
-            print("✅ 模型已存在，跳过下载！")
-            return cache_dir, local_path
-        
         print("📥 开始从Hugging Face下载FLUX.1-dev模型...")
-        print("⚠️  注意：这是一个大模型（~23GB），下载可能需要较长时间")
+        print("⚠️  注意：这是一个大模型（~53GB），下载可能需要较长时间")
         
-        # 确保缓存目录存在
-        os.makedirs(cache_dir, exist_ok=True)
+        # 创建临时目录
+        temp_dir = tempfile.mkdtemp(prefix="flux_transfer_")
+        local_path = os.path.join(temp_dir, "flux-dev")
         
         print(f"📁 下载目录: {local_path}")
         
-        # 下载模型，使用已登录的token
+        # 下载模型
         snapshot_download(
             repo_id="black-forest-labs/FLUX.1-dev",
             local_dir=local_path,
@@ -81,7 +48,7 @@ def download_flux_from_hf():
         )
         
         print("✅ 下载完成！")
-        return cache_dir, local_path
+        return temp_dir, local_path
         
     except Exception as e:
         print(f"❌ 下载失败: {e}")
@@ -95,7 +62,6 @@ def verify_model(local_path):
     
     # 检查重要文件
     important_files = [
-        "config.json",
         "model_index.json"
     ]
     
@@ -117,12 +83,19 @@ def verify_model(local_path):
     
     return len(model_files) > 0
 
-def upload_to_modelscope(local_path, ms_model_name="your-org/FLUX.1-dev"):
+def upload_to_modelscope(local_path, ms_model_name="xiaosa/FLUX.1-dev"):
     """上传到ModelScope"""
     try:
+        # 确保git模块可用
+        try:
+            import git
+        except ImportError:
+            print("📦 安装git模块...")
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "gitpython"])
+            import git
+        
         from modelscope.hub.api import HubApi
         from modelscope.hub.repository import Repository
-        import git
         
         print(f"📤 开始上传到ModelScope: {ms_model_name}")
         
@@ -174,34 +147,41 @@ def upload_to_modelscope(local_path, ms_model_name="your-org/FLUX.1-dev"):
             
     except Exception as e:
         print(f"❌ 上传失败: {e}")
+        print("💡 建议:")
+        print("1. 检查ModelScope token是否正确")
+        print("2. 确认网络连接正常")
+        print("3. 尝试手动克隆仓库测试")
         return False
 
 def main():
     """主函数"""
-    print("🚀 FLUX.1-dev 模型迁移开始")
+    print("🚀 修复版FLUX.1-dev模型迁移")
     print("=" * 50)
     
-    # 使用默认的ModelScope目标仓库名
+    # 1. 确保依赖安装
+    ensure_dependencies()
+    
+    # 2. 设置ModelScope仓库名
     ms_model_name = "xiaosa/FLUX.1-dev"
     print(f"目标ModelScope仓库: {ms_model_name}")
     
     temp_dir = None
     try:
-        # 1. 下载模型
+        # 3. 下载模型
         temp_dir, local_path = download_flux_from_hf()
         if not local_path:
             return False
         
-        # 2. 验证模型
+        # 4. 验证模型
         if not verify_model(local_path):
             print("❌ 模型验证失败")
             return False
         
-        # 3. 上传到ModelScope
+        # 5. 上传到ModelScope
         if not upload_to_modelscope(local_path, ms_model_name):
             return False
         
-        print("🎉 FLUX.1-dev 模型迁移完成！")
+        print("🎉 FLUX.1-dev模型迁移完成！")
         return True
         
     except KeyboardInterrupt:
@@ -211,10 +191,10 @@ def main():
         print(f"💥 意外错误: {e}")
         return False
     finally:
-        # 注意：不再清理缓存目录，以便下次重用
-        if temp_dir:
-            print(f"📁 模型已缓存至: {temp_dir}")
-            print("💡 下次运行将跳过下载步骤")
+        # 清理临时文件
+        if temp_dir and os.path.exists(temp_dir):
+            print(f"🧹 清理临时目录: {temp_dir}")
+            shutil.rmtree(temp_dir)
 
 if __name__ == "__main__":
     success = main()

@@ -15,10 +15,35 @@ import tempfile
 import shutil
 from pathlib import Path
 
+def check_model_exists(local_path):
+    """检查模型是否已存在"""
+    if not os.path.exists(local_path):
+        return False
+    
+    # 检查目录是否为空
+    if not os.listdir(local_path):
+        return False
+    
+    # 检查是否有基本文件
+    basic_files = ["README.md", "config.json", "model_index.json"]
+    has_basic = any(os.path.exists(os.path.join(local_path, f)) for f in basic_files)
+    
+    if not has_basic:
+        return False
+    
+    print(f"✅ 模型已存在: {local_path}")
+    return True
+
 def download_from_hf(hf_model, local_path, token=None):
     """从Hugging Face下载模型"""
     try:
         from huggingface_hub import snapshot_download
+        
+        # 检查模型是否已存在
+        if check_model_exists(local_path):
+            print(f"⏭️  跳过下载，模型已存在: {local_path}")
+            return True
+        
         print(f"📥 正在从Hugging Face下载: {hf_model}")
         
         kwargs = {
@@ -87,10 +112,13 @@ def main():
     
     print(f"🚀 开始迁移: {hf_model} -> {ms_model}")
     
-    # 创建临时目录
-    with tempfile.TemporaryDirectory(prefix="model_transfer_") as temp_dir:
-        local_path = os.path.join(temp_dir, "model")
-        
+    # 使用持久缓存目录
+    cache_root = os.path.expanduser("~/.cache/simple_model_transfer")
+    os.makedirs(cache_root, exist_ok=True)
+    safe_model_name = hf_model.replace("/", "_").replace("-", "_")
+    local_path = os.path.join(cache_root, safe_model_name)
+    
+    try:
         # 下载
         if not download_from_hf(hf_model, local_path, hf_token):
             sys.exit(1)
@@ -104,6 +132,15 @@ def main():
             sys.exit(1)
         
         print("🎉 迁移完成！")
+        print(f"📁 模型已缓存到: {local_path}")
+        print("💡 下次运行相同模型将跳过下载")
+    
+    except KeyboardInterrupt:
+        print("\n⏹️  用户中断操作")
+        sys.exit(1)
+    except Exception as e:
+        print(f"💥 意外错误: {e}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
