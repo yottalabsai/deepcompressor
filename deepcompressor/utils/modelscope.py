@@ -78,8 +78,18 @@ def download_model_from_modelscope(
     download_kwargs = {
         "model_id": model_id,
         "cache_dir": cache_dir,
-        "force_download": force_download,
     }
+    
+    # ModelScope 的 snapshot_download 不支持 force_download 参数
+    # 如果需要强制重新下载，需要先清理缓存
+    if force_download and cache_dir:
+        import shutil
+        import os
+        # ModelScope 缓存结构通常是 cache_dir/model_id/
+        model_cache_path = os.path.join(cache_dir, model_id)
+        if os.path.exists(model_cache_path):
+            logger.info(f"Force download requested, removing cache: {model_cache_path}")
+            shutil.rmtree(model_cache_path, ignore_errors=True)
     
     if revision:
         download_kwargs["revision"] = revision
