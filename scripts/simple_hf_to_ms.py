@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
 简化版 Hugging Face 到 ModelScope 模型迁移脚本

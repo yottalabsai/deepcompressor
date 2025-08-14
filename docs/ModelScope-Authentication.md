@@ -161,7 +161,7 @@ ModelScope将token存储在用户主目录下：
 检查ModelScope认证状态的脚本：
 
 ```python
-#!/usr/bin/env python3
+#!/usr/bin/env python
 """检查ModelScope认证状态"""
 
 def check_modelscope_auth():

@@ -24,7 +24,7 @@ ACTION="$1"
 case "$ACTION" in
     "setup")
         echo "📦 安装依赖..."
-        pip3 install transformers huggingface_hub modelscope gitpython
+        pip install transformers huggingface_hub modelscope gitpython
         
         echo ""
         echo "🔐 设置认证..."
@@ -33,16 +33,16 @@ case "$ACTION" in
         echo ""
         echo "1️⃣ Hugging Face认证:"
         echo "如果您有token，可以运行："
-        echo "   huggingface-cli login --token \"hf_your_token\""
+        echo "   python -m huggingface_hub.commands.huggingface_cli login --token \"hf_your_token\""
         echo "否则运行交互式登录："
-        echo "   huggingface-cli login"
+        echo "   python -m huggingface_hub.commands.huggingface_cli login"
         
         echo ""
         echo "2️⃣ ModelScope认证:"
         echo "如果您有token，可以运行："
-        echo "   modelscope login --token \"your_token\""
+        echo "   python -m modelscope.cli.cli login --token \"your_token\""
         echo "否则运行交互式登录："
-        echo "   modelscope login"
+        echo "   python -m modelscope.cli.cli login"
         
         echo ""
         echo "✅ 依赖安装完成！请手动完成认证步骤。"
@@ -64,7 +64,7 @@ case "$ACTION" in
         echo "   目标: $MS_MODEL"
         echo ""
         
-        python3 scripts/simple_hf_to_ms.py "$HF_MODEL" "$MS_MODEL"
+        python scripts/simple_hf_to_ms.py "$HF_MODEL" "$MS_MODEL"
         ;;
         
     "batch")
@@ -94,7 +94,7 @@ case "$ACTION" in
         
         echo "1️⃣ 检查Python依赖:"
         for pkg in transformers huggingface_hub modelscope git; do
-            if python3 -c "import $pkg" 2>/dev/null; then
+            if python -c "import $pkg" 2>/dev/null; then
                 echo "   ✅ $pkg"
             else
                 echo "   ❌ $pkg (未安装)"
@@ -103,12 +103,12 @@ case "$ACTION" in
         
         echo ""
         echo "2️⃣ 检查认证状态:"
-        python3 scripts/check_modelscope_auth.py
+        python scripts/check_modelscope_auth.py
         
         echo ""
         echo "3️⃣ 测试迁移 (验证模式):"
         echo "   正在测试下载小模型..."
-        if python3 scripts/hf_to_modelscope_transfer.py \
+        if python scripts/hf_to_modelscope_transfer.py \
            --hf-model "microsoft/DialoGPT-small" \
            --ms-model "test/DialoGPT-small" \
            --verify-only 2>/dev/null; then

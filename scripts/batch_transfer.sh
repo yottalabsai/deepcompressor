@@ -44,7 +44,7 @@ while IFS=' ' read -r hf_model ms_model || [ -n "$hf_model" ]; do
     echo "----------------------------------------"
     
     # 执行迁移
-    if python3 scripts/simple_hf_to_ms.py "$hf_model" "$ms_model"; then
+    if python scripts/simple_hf_to_ms.py "$hf_model" "$ms_model"; then
         echo "✅ 成功: $hf_model -> $ms_model"
         SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
     else

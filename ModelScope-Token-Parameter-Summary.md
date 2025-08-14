@@ -11,7 +11,7 @@
 通过实际安装和测试 ModelScope 1.29.0，确认了以下信息：
 
 ```bash
-$ python3 -m modelscope.cli.cli login --help
+$ python -m modelscope.cli.cli login --help
 
 usage: modelscope <command> [<args>] login [-h] --token TOKEN
 

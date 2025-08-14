@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
 FLUX.1-dev 模型迁移脚本
@@ -11,8 +11,8 @@ import tempfile
 import shutil
 from pathlib import Path
 
-# 设置环境变量
-os.environ['MODELSCOPE_API_TOKEN'] = 'dd75741e-ebfb-49fa-b53a-a358a56fd765'
+# ModelScope token需要通过环境变量或命令行登录设置
+# 使用方法：export MODELSCOPE_API_TOKEN="your_token" 或 python -m modelscope.cli.cli login --token "your_token"
 
 def download_flux_from_hf():
     """从Hugging Face下载FLUX.1-dev模型"""
@@ -28,12 +28,11 @@ def download_flux_from_hf():
         
         print(f"📁 下载目录: {local_path}")
         
-        # 下载模型，使用提供的token
+        # 下载模型，使用已登录的token
         snapshot_download(
             repo_id="black-forest-labs/FLUX.1-dev",
             local_dir=local_path,
-            local_dir_use_symlinks=False,
-            token="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"
+            local_dir_use_symlinks=False
         )
         
         print("✅ 下载完成！")
