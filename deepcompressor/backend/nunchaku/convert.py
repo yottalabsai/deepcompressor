@@ -8,7 +8,7 @@ import torch
 import tqdm
 
 from .utils import convert_to_nunchaku_w4x4y16_linear_weight, convert_to_nunchaku_w4x16_linear_weight
-from .convert_enhanced import load_config_json, get_model_path_from_config, prepare_metadata_from_config
+from .convert_enhanced import load_config_json, get_model_path_from_config, prepare_metadata_from_config, resolve_actual_model_path
 
 
 def convert_to_nunchaku_w4x4y16_linear_state_dict(
@@ -438,12 +438,18 @@ if __name__ == "__main__":
                 print(f"Using model name as path: {model_path}")
             
             if model_path:
-                config_data = load_config_json(model_path)
-                if config_data:
-                    metadata = prepare_metadata_from_config(config_data)
-                    print(f"Successfully prepared metadata with {len(metadata)} fields")
+                # Resolve the actual local path (handle HuggingFace model IDs)
+                actual_model_path = resolve_actual_model_path(model_path)
+                if actual_model_path:
+                    config_data = load_config_json(actual_model_path)
+                    if config_data:
+                        # Pass the converted state dict for precision detection
+                        metadata = prepare_metadata_from_config(config_data, converted_state_dict)
+                        print(f"Successfully prepared metadata with {len(metadata)} fields")
+                    else:
+                        print("Warning: Could not load config.json, saving without metadata")
                 else:
-                    print("Warning: Could not load config.json, saving without metadata")
+                    print(f"Warning: Could not resolve actual model path for: {model_path}")
             else:
                 print("Warning: Could not determine model path, saving without metadata")
         except Exception as e:

@@ -62,9 +62,17 @@ def validate_metadata(safetensors_path: str, verbose: bool = False) -> bool:
     
     # Check for expected metadata fields
     expected_fields = [
+        'config',                # Required by nunchaku
+        'quantization_config',   # Required by nunchaku  
+        'model_class',          # Required by nunchaku
         'metadata_source',
         'enhanced_by',
-        'full_config'
+    ]
+    
+    # Optional but recommended fields
+    optional_fields = [
+        'full_config',
+        'comfy_config',
     ]
     
     missing_fields = []
@@ -76,6 +84,17 @@ def validate_metadata(safetensors_path: str, verbose: bool = False) -> bool:
         print(f"⚠️  Missing expected fields: {missing_fields}")
     else:
         print("✅ All expected metadata fields present")
+    
+    # Check optional fields
+    missing_optional = []
+    for field in optional_fields:
+        if field not in metadata:
+            missing_optional.append(field)
+    
+    if missing_optional:
+        print(f"ℹ️  Missing optional fields: {missing_optional}")
+    else:
+        print("✅ All optional fields present")
     
     if verbose:
         print("\n=== Metadata Content ===")
@@ -91,16 +110,20 @@ def validate_metadata(safetensors_path: str, verbose: bool = False) -> bool:
             else:
                 print(f"{key}: {value}")
     
-    # Validate full_config is valid JSON
-    if 'full_config' in metadata:
-        try:
-            config_data = json.loads(metadata['full_config'])
-            print("✅ full_config contains valid JSON")
-            if verbose:
-                print(f"Config contains {len(config_data)} top-level fields")
-        except json.JSONDecodeError as e:
-            print(f"❌ full_config contains invalid JSON: {e}")
-            return False
+    # Validate JSON fields
+    json_fields = ['config', 'quantization_config', 'comfy_config', 'full_config']
+    for field in json_fields:
+        if field in metadata:
+            try:
+                data = json.loads(metadata[field])
+                print(f"✅ {field} contains valid JSON")
+                if verbose and field == 'config':
+                    print(f"Config contains {len(data)} top-level fields")
+                elif verbose and field == 'quantization_config':
+                    print(f"Quantization config method: {data.get('method', 'unknown')}")
+            except json.JSONDecodeError as e:
+                print(f"❌ {field} contains invalid JSON: {e}")
+                return False
     
     return True
 
