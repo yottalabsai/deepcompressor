@@ -8,6 +8,7 @@ import torch
 import tqdm
 
 from .utils import convert_to_nunchaku_w4x4y16_linear_weight, convert_to_nunchaku_w4x16_linear_weight
+from .convert_enhanced import load_config_json, get_model_path_from_config, prepare_metadata_from_config
 
 
 def convert_to_nunchaku_w4x4y16_linear_state_dict(
@@ -386,6 +387,9 @@ if __name__ == "__main__":
     parser.add_argument("--output-root", type=str, default="", help="root to the output checkpoint directory.")
     parser.add_argument("--model-name", type=str, default=None, help="name of the model.")
     parser.add_argument("--float-point", action="store_true", help="use float-point 4-bit quantization.")
+    parser.add_argument("--config-yaml", type=str, default="", help="path to the diffusion config yaml file for metadata extraction.")
+    parser.add_argument("--model-path", type=str, default="", help="path to the model directory (overrides config-yaml detection).")
+    parser.add_argument("--add-metadata", action="store_true", help="add config.json metadata to the generated safetensors files.")
     args = parser.parse_args()
     if not args.output_root:
         args.output_root = args.quant_path
@@ -415,6 +419,49 @@ if __name__ == "__main__":
     )
     output_dirpath = os.path.join(args.output_root, model_name)
     os.makedirs(output_dirpath, exist_ok=True)
-    safetensors.torch.save_file(converted_state_dict, os.path.join(output_dirpath, "transformer_blocks.safetensors"))
-    safetensors.torch.save_file(other_state_dict, os.path.join(output_dirpath, "unquantized_layers.safetensors"))
+    
+    # Prepare metadata if requested
+    metadata = None
+    if args.add_metadata:
+        print("=== Adding config.json metadata to safetensors files ===")
+        try:
+            # Determine model path
+            if args.model_path:
+                model_path = args.model_path
+                print(f"Using provided model path: {model_path}")
+            elif args.config_yaml:
+                model_path = get_model_path_from_config(args.config_yaml)
+                print(f"Extracted model path from config: {model_path}")
+            else:
+                # Try to use model name as path
+                model_path = model_name
+                print(f"Using model name as path: {model_path}")
+            
+            if model_path:
+                config_data = load_config_json(model_path)
+                if config_data:
+                    metadata = prepare_metadata_from_config(config_data)
+                    print(f"Successfully prepared metadata with {len(metadata)} fields")
+                else:
+                    print("Warning: Could not load config.json, saving without metadata")
+            else:
+                print("Warning: Could not determine model path, saving without metadata")
+        except Exception as e:
+            print(f"Warning: Error preparing metadata: {e}")
+            print("Continuing without metadata...")
+    
+    # Save files with or without metadata
+    transformer_blocks_path = os.path.join(output_dirpath, "transformer_blocks.safetensors")
+    unquantized_layers_path = os.path.join(output_dirpath, "unquantized_layers.safetensors")
+    
+    if metadata:
+        print("Saving transformer_blocks.safetensors with metadata...")
+        safetensors.torch.save_file(converted_state_dict, transformer_blocks_path, metadata=metadata)
+        print("Saving unquantized_layers.safetensors with metadata...")
+        safetensors.torch.save_file(other_state_dict, unquantized_layers_path, metadata=metadata)
+    else:
+        print("Saving safetensors files without metadata...")
+        safetensors.torch.save_file(converted_state_dict, transformer_blocks_path)
+        safetensors.torch.save_file(other_state_dict, unquantized_layers_path)
+    
     print(f"Quantized model saved to {output_dirpath}.")
