@@ -433,9 +433,19 @@ if __name__ == "__main__":
                 model_path = get_model_path_from_config(args.config_yaml)
                 print(f"Extracted model path from config: {model_path}")
             else:
-                # Try to use model name as path
-                model_path = model_name
-                print(f"Using model name as path: {model_path}")
+                # Try to infer from model name
+                if "flux" in model_name.lower():
+                    # Try to map flux model names to HuggingFace IDs
+                    if "dev" in model_name.lower():
+                        model_path = "black-forest-labs/FLUX.1-dev"
+                    elif "schnell" in model_name.lower():
+                        model_path = "black-forest-labs/FLUX.1-schnell"
+                    else:
+                        model_path = "black-forest-labs/FLUX.1-dev"  # default
+                    print(f"Inferred model path from name '{model_name}': {model_path}")
+                else:
+                    model_path = model_name
+                    print(f"Using model name as path: {model_path}")
             
             if model_path:
                 # Resolve the actual local path (handle HuggingFace model IDs)
