@@ -45,7 +45,7 @@ ftfy = "== 6.3.1"
 cd-fvd = "== 0.1.1"
 xformers = "== 0.0.32.post2"
 av = "== 15.0.0"
-clip = "== 1.0"
+clip = ">= 0.2.0"
 image_reward = { git = "https://github.com/THUDM/ImageReward.git", branch = "main" }
 modelscope = "== 1.29.1"
 
