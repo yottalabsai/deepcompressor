@@ -360,6 +360,8 @@ def main(config: DiffusionPtqRunConfig, logging_level: int = tools.logging.DEBUG
             tools.logging.Formatter.indent_inc()
             config.eval.generate(pipeline, task=config.pipeline.task)
             tools.logging.Formatter.indent_dec()
+        # Always output "Saving results to" when skipping evaluation
+        logger.info(f"* Saving results to {config.output.job_dirpath}")
     else:
         logger.info(f"* Evaluating model {'(skipping generation)' if config.skip_gen else ''}")
         tools.logging.Formatter.indent_inc()
